@@ -14,14 +14,31 @@ class SIR():
         nombre_pais = self.df.loc[paciente_cero_index, "Country Name"]
         self.df.loc[paciente_cero_index,"S"] -= infectados_iniciales
         self.df.loc[paciente_cero_index,"I"] += infectados_iniciales
+        print(f"El virus ha comenzado en: {nombre_pais}")  
+        return nombre_pais
+
+    def infectar_vecinos(self,index_paises): 
+        infectados_iniciales = 1
+        pais = random.choice(index_paises)
+        nombre_pais = self.df.loc[pais, "Country Name"]
+        self.df.loc[pais,"S"] -= infectados_iniciales
+        self.df.loc[pais,"I"] += infectados_iniciales
         print(f"El virus ha comenzado en {nombre_pais}")        
-        return [paciente_cero_index,nombre_pais]
+        return nombre_pais
 
     
-    def infectar(self,pais_infectado):        
+    def buscar_vecinos(self,pais_infectado):        
         lista_paises = self.df[self.df["Country Name"] == pais_infectado]
-        vecinos = lista_paises["vecinos"]
-        print(vecinos)
+        vecinos = list(lista_paises["vecinos"])
+        paises = vecinos[0].split(",")
+        indexses = []
+        for i in paises:
+            pais = i.strip()
+            index = self.mapa_mundo.get(pais)
+            indexses.append(index)
+        return indexses
+            
+            
 
 
     
