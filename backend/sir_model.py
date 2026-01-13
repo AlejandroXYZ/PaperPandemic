@@ -21,12 +21,11 @@ class SIR():
         print(f"El virus ha comenzado en: {nombre_pais}")  
         return nombre_pais
 
-    def infectar_vecinos(self,index_paises): 
+    def infectar_vecinos(self,index): 
         infectados_iniciales = opt.INFECTADOS_INICIALES_VECINOS
-        pais = random.choice(index_paises)
-        nombre_pais = self.df.loc[pais, "Country Name"]
-        self.df.loc[pais,"S"] -= infectados_iniciales
-        self.df.loc[pais,"I"] += infectados_iniciales
+        nombre_pais = self.df.loc[index, "Country Name"]
+        self.df.loc[index,"S"] -= infectados_iniciales
+        self.df.loc[index,"I"] += infectados_iniciales
         print(f"El virus ha comenzado en {nombre_pais}")        
         return nombre_pais
 
@@ -41,7 +40,6 @@ class SIR():
             index = self.mapa_mundo.get(pais)
             indexses.append(index)
         return indexses
-
 
     
     def ejecutar(self):            
