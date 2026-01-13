@@ -2,6 +2,10 @@ import pandas as pd
 from dataclasses import dataclass
 import sqlite3 as sql
 import random
+from options import Options as opt
+
+opt = opt()
+
 
 @dataclass
 class SIR():
@@ -9,7 +13,7 @@ class SIR():
     df: pd.DataFrame = None
 
     def infectar_primera_vez(self):
-        infectados_iniciales = 1
+        infectados_iniciales = opt.INFECTADOS_INICIALES
         paciente_cero_index = random.randint(0,len(self.df) - 1 )
         nombre_pais = self.df.loc[paciente_cero_index, "Country Name"]
         self.df.loc[paciente_cero_index,"S"] -= infectados_iniciales
@@ -18,7 +22,7 @@ class SIR():
         return nombre_pais
 
     def infectar_vecinos(self,index_paises): 
-        infectados_iniciales = 1
+        infectados_iniciales = opt.INFECTADOS_INICIALES_VECINOS
         pais = random.choice(index_paises)
         nombre_pais = self.df.loc[pais, "Country Name"]
         self.df.loc[pais,"S"] -= infectados_iniciales
@@ -37,8 +41,6 @@ class SIR():
             index = self.mapa_mundo.get(pais)
             indexses.append(index)
         return indexses
-            
-            
 
 
     
