@@ -64,7 +64,6 @@ class Loader():
     def guardar_estados(self,datos,pais):
         try:
             conn = sql.connect("data/mundo.db")
-            datos.to_sql("estado_actual",conn,if_exists="replace",index=False)
             df_ultimo = pd.read_sql_query("SELECT dia FROM historial ORDER BY ROWID DESC LIMIT 1", conn)
             
             if not df_ultimo.empty:
@@ -80,6 +79,9 @@ class Loader():
             "Primer_pais": pais}
             df = pd.DataFrame([diccionario])
             df.to_sql("historial",conn,if_exists="append",index=False)         
+            datos.to_sql("estado_actual",conn,if_exists="replace",index=False)         
+
+ 
             conn.close()
 
         except Exception as e:
