@@ -1,12 +1,14 @@
 from sir_model import SIR
 from loader import Loader
+from options import Options as opt
 import sqlite3 as sql
-import pandas as pd
 import random
 
-csv = Loader("data/poblacion.csv")
+opt = opt()
+
+csv = Loader(opt.RUTA_CSV)
 db = csv.crear_db()
-conn = sql.connect("data/mundo.db")
+conn = sql.connect(opt.RUTA_DB_CREADA)
 
 dataframe = csv.cargar_df()
 
@@ -27,7 +29,7 @@ def avanzar_dia(dataframe):
         historial = csv.historial()
         infectado = historial["Primer_pais"].iloc[0]
         probabilidad_infectar_vecinos = random.random()
-        if probabilidad_infectar_vecinos < 0.08:
+        if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
             vecinos = sir.buscar_vecinos(infectado)
             sir.infectar_vecinos(vecinos)
     resultado = sir.ejecutar()

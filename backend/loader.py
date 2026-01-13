@@ -2,6 +2,9 @@ from dataclasses import dataclass
 import pandas as pd
 import sqlite3 as sql
 import os
+from options import Options as opt
+
+opt = opt()
 
 @dataclass
 class Loader():
@@ -13,7 +16,7 @@ class Loader():
     
     def cargar_df(self):
         print("Cargando el archivo csv")
-        df = pd.read_csv("data/poblacion.csv")
+        df = pd.read_csv(opt.RUTA_CSV)
         if df["poblacion"].dtype == 'object':
             df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
         
@@ -26,19 +29,19 @@ class Loader():
         df["S"] = df["poblacion"]
         df["I"] = 0.0
         df["R"] = 0.0
-        df["beta"] = 0.3
-        df["gamma"] = 0.1
+        df["beta"] = opt.BETA
+        df["gamma"] = opt.GAMMA
         return df
 
     def cargar_db(self):
-        conn = sql.connect("data/mundo.db")
+        conn = sql.connect(opt.RUTA_DB_CREADA)
         df = pd.read_sql("SELECT * FROM estado_actual",conn)
         conn.close()
         return df
 
 
     def historial(self):
-        conn = sql.connect("data/mundo.db")
+        conn = sql.connect(opt.RUTA_DB_CREADA)
         df = pd.read_sql("SELECT * FROM historial",conn)
         conn.close()
         return df
@@ -46,12 +49,12 @@ class Loader():
         
     def crear_db(self):
 
-        if os.path.exists("data/mundo.db"):
+        if os.path.exists(opt.RUTA_DB_CREADA):
             print("Cargando base de datos...")
             return True
         else:
             print("Creado base de datos")
-            conn = sql.connect("data/mundo.db")
+            conn = sql.connect(opt.RUTA_DB_CREADA)
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER )")
             cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, Primer_pais TEXT)")        
@@ -63,7 +66,7 @@ class Loader():
 
     def guardar_estados(self,datos,pais):
         try:
-            conn = sql.connect("data/mundo.db")
+            conn = sql.connect(opt.RUTA_DB_CREADA)
             df_ultimo = pd.read_sql_query("SELECT dia FROM historial ORDER BY ROWID DESC LIMIT 1", conn)
             
             if not df_ultimo.empty:
