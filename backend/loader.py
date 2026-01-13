@@ -56,7 +56,7 @@ class Loader():
             print("Creado base de datos")
             conn = sql.connect(opt.RUTA_DB_CREADA)
             cursor = conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER )")
+            cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER)")
             cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, Primer_pais TEXT)")        
             conn.commit()
             cursor.close()

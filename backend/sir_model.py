@@ -14,14 +14,14 @@ class SIR():
 
     def infectar_primera_vez(self):
         infectados_iniciales = opt.INFECTADOS_INICIALES
-        paciente_cero_index = random.randint(0,len(self.df) - 1 )
+        paciente_cero_index = opt.INDEX_PAIS_A_INFECTAR
         nombre_pais = self.df.loc[paciente_cero_index, "Country Name"]
         self.df.loc[paciente_cero_index,"S"] -= infectados_iniciales
         self.df.loc[paciente_cero_index,"I"] += infectados_iniciales
         print(f"El virus ha comenzado en: {nombre_pais}")  
         return nombre_pais
 
-    def infectar_vecinos(self,index): 
+    def infectar(self,index): 
         infectados_iniciales = opt.INFECTADOS_INICIALES_VECINOS
         nombre_pais = self.df.loc[index, "Country Name"]
         self.df.loc[index,"S"] -= infectados_iniciales
@@ -30,7 +30,7 @@ class SIR():
         return nombre_pais
 
     
-    def buscar_vecinos(self,pais_infectado):        
+    def buscar_vecinos(self,pais_infectado): 
         lista_paises = self.df[self.df["Country Name"] == pais_infectado]
         vecinos = list(lista_paises["vecinos"])
         paises = vecinos[0].split(",")
@@ -38,12 +38,19 @@ class SIR():
         for i in paises:
             pais = i.strip()
             index = self.mapa_mundo.get(pais)
+             
             indexses.append(index)
-        return indexses
+        if not indexses[0]:
+            return None
+        else:
+            infectados = self.df.loc[indexses]
+            infectados = infectados[infectados["I"] == 0]
+            lista_final = infectados.index.tolist()
+            return lista_final
 
     
-    def ejecutar(self):            
-    
+    def ejecutar(self):
+
         sano_a_infectado = self.df["beta"] * self.df["S"] * self.df["I"] / self.df["poblacion"]
         infectado_a_recuperado = self.df["I"] * self.df["gamma"]
         self.df["S"] = (self.df["S"] - sano_a_infectado)
