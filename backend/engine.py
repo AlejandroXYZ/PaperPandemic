@@ -28,10 +28,11 @@ def avanzar_dia(dataframe):
         dataframe = csv.cargar_db()
         historial = csv.historial()
         infectado = historial["Primer_pais"].iloc[0]
-        probabilidad_infectar_vecinos = random.random()
-        if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
-            vecinos = sir.buscar_vecinos(infectado)
-            sir.infectar_vecinos(vecinos)
+        vecinos = sir.buscar_vecinos(infectado)
+        for i in vecinos:
+            probabilidad_infectar_vecinos = random.random()
+            if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
+                sir.infectar_vecinos(i)
     resultado = sir.ejecutar()
     print("guardando estados")
     csv.guardar_estados(resultado,infectado)
