@@ -49,6 +49,22 @@ class SIR():
             return lista_final
 
     
+    def buscar_vuelos_y_puertos(self,columna):
+        limpiar = self.df[columna].astype(str).str.lower() 
+        tiene_conexion = limpiar.str.contains("accesible|océano|mar|rutas internacionales")
+
+        # Identificar emisores
+        emisores = tiene_conexion & (self.df["I"] > opt.UMBRAL_INFECCION_EXTERNO)
+        num_emisores = emisores.sum()
+
+        if num_emisores == 0:
+            return [],0
+
+        victimas = tiene_conexion & (self.df["I"] == 0)
+        indice_victimas = self.df[victimas].index.tolist()
+        return indice_victimas,num_emisores    
+
+
     def ejecutar(self):
 
         sano_a_infectado = self.df["beta"] * self.df["S"] * self.df["I"] / self.df["poblacion"]

@@ -31,20 +31,40 @@ def avanzar_dia(dataframe):
         infectado = historial["Primer_pais"].iloc[0] if not historial.empty else "Desconocido"
         vecinos = sir.buscar_vecinos(infectado)
         pais_infectado = sir.df[sir.df["Country Name"] == infectado]
-        print(pais_infectado["I"].values[0])
         if pais_infectado["I"].values[0] > opt.UMBRAL_INFECCION_EXTERNO:
-            if not vecinos:
-                print("El virus está contenido, no hay vecinos sanos cerca")
-            else:
+            if vecinos:
                 for i in vecinos:
                     probabilidad_infectar_vecinos = random.random()
                     if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
                         sir.infectar(i)
+
+    victimas_aereas,amenazas_aereas = sir.buscar_vuelos_y_puertos("vuelo")
+    if amenazas_aereas > 0:
+        riesgo_actual = opt.PROBABILIDAD_INFECTAR_VUELO * (1 + (amenazas_aereas * 0.1))
+        riesgo_actual = min(riesgo_actual,0.5)
+
+        for victima in victimas_aereas:
+            dado = random.random()
+            if dado < riesgo_actual:
+                sir.infectar(victima)
+                print(f"Contagio Aéreo, un avión infectó a {sir.df.at[victima,'Country Name']}")
+                
+
+    victimas_mar,amenazas_puertos = sir.buscar_vuelos_y_puertos("puerto")
+    if amenazas_puertos > 0:
+        riego_actual = opt.PROBABILIDAD_INFECTAR_PUERTO * (1 + (amenazas_puertos * 0.05))
+        riego_actual = min(riesgo_actual,0.3)
+        for victima in victimas_mar:
+            if random.random() < riesgo_actual:
+                sir.infectar(victima)            
+                print(f"Contagio marítimo, un barco a infectado a {sir.df.at[victima,'Country Name']}")
+
     resultado = sir.ejecutar()
     print("guardando estados")
     csv.guardar_estados(resultado,infectado)
     print("estados guardados")
     print(f"Total de infectados:  {resultado["I"].sum().round()}")
+    print(f"Total países infectados:  {len(sir.df.loc[df["I"] > 0].index.tolist())}")
     return resultado
 
         
