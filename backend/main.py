@@ -39,3 +39,19 @@ def obtener_resumen():
         "primer_pais_origen": primer_pais,
         "total_paises_mundo": total_paises
     }
+
+
+@app.post("/avanzar_dia")
+def avanzar():
+    resultado = motor.avanzar_dia()
+    return {
+        "mensaje": "Día avanzado correctamente",
+        "datos": resultado
+    }
+
+
+@app.get("/reiniciar")
+def reiniciar():
+    global motor
+    motor = Engine()
+    return {"mensaje": "Simulación reiniciada"}
