@@ -95,7 +95,7 @@ class SIR():
 
         # Erradicación
 
-        erradicacion = (self.df["I"] > 0) & (self.df["I"] < opt.UMBRAL_ERRADICACION)
+        erradicacion = (self.df["I"] > 0) & (self.df["S"] < opt.UMBRAL_ERRADICACION)
 
         if erradicacion.any():
             infectados_restantes = self.df.loc[erradicacion, "I"]

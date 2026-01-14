@@ -59,7 +59,7 @@ class Loader():
             conn = sql.connect(opt.RUTA_DB_CREADA)
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER,'M' INTEGER)")
-            cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, total_M INTEGER, Primer_pais TEXT)")        
+            cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, total_M INTEGER, Primer_pais TEXT, Paises_Infectados INTEGER)")        
             conn.commit()
             cursor.close()
             conn.close()
@@ -76,18 +76,19 @@ class Loader():
             else:
                 ultimo_dia = 0 
             
+            print(datos.loc[datos["I"] > 0]["I"].sum().round())
             diccionario = {
             "total_S": datos["S"].sum(),
             "total_R": datos["R"].sum(),            
             "total_I": datos["I"].sum(),
             "total_M": datos["M"].sum(),
             "dia": ultimo_dia + 1,
-            "Primer_pais": pais}
+            "Primer_pais": pais,
+            "Paises_Infectados": datos.loc[datos["I"] > 0]["I"].sum().round()}
             df = pd.DataFrame([diccionario])
             df.to_sql("historial",conn,if_exists="append",index=False)         
             datos.to_sql("estado_actual",conn,if_exists="replace",index=False)         
 
- 
             conn.close()
 
         except Exception as e:
