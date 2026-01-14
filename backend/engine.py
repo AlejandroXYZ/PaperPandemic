@@ -12,17 +12,19 @@ class Engine():
     opt = opt()    
     csv = Loader(opt.RUTA_CSV)
     db = csv.crear_db()
-    conn = sql.connect(opt.RUTA_DB_CREADA)
     dataframe = csv.cargar_df()  # Carga el archivo csv
     mapa = csv.cargar_mapa(dataframe)
     sir = SIR(mapa_mundo = mapa,df = dataframe)
+    historial = csv.historial()
+    primer_pais = None
     
     def avanzar_dia(self):
 
         if not self.db:
             print("Creando Base de datos")
             self.sir.infectar_primera_vez()
-            infectado = self.dataframe.loc[opt.INDEX_PAIS_A_INFECTAR, "Country Name"]
+            self.primer_pais = self.dataframe.loc[opt.INDEX_PAIS_A_INFECTAR, "Country Name"]
+            
         else:
             print("Base de datos cargada")        
             sanos_totales = self.dataframe["S"].sum()
@@ -35,8 +37,7 @@ class Engine():
                 return {"status":"HUMAN WINS"}
         
             self.sir.df = self.df
-            historial = self.csv.historial()
-            infectado = historial["Primer_pais"].iloc[0] if not historial.empty else "Desconocido"
+            infectado = self.historial["Primer_pais"].iloc[0] if not self.historial.empty else "Desconocido"
             vecinos = self.sir.buscar_vecinos(infectado)
             pais_infectado = self.sir.df[self.sir.df["Country Name"] == infectado]
             if pais_infectado["I"].values[0] > opt.UMBRAL_INFECCION_EXTERNO:
