@@ -19,6 +19,7 @@ sir = SIR(mapa_mundo = mapa,df = dataframe)
 
 def avanzar_dia(dataframe):
 
+
     if db == False:
         print("Creando Base de datos")
         infectar = sir.infectar_primera_vez()
@@ -26,6 +27,17 @@ def avanzar_dia(dataframe):
     else:
         print("Base de datos cargada")
         df = csv.cargar_db()
+        
+        sanos_totales = df["S"].sum()
+        infectados_totales = df["I"].sum()
+
+        if sanos_totales <= 0:
+            print("Todo el mundo está infectado")
+            return {"status":"ALL WORLD INFECTED"}
+        elif infectados_totales <= 0:
+            print("El virus se extinguió")
+            return {"status":"HUMAN WINS"}
+        
         sir.df = df
         historial = csv.historial()
         infectado = historial["Primer_pais"].iloc[0] if not historial.empty else "Desconocido"
@@ -63,6 +75,8 @@ def avanzar_dia(dataframe):
     print("guardando estados")
     csv.guardar_estados(resultado,infectado)
     print("estados guardados")
+    print(resultado)
+    print(f"Total Sanos:  {resultado["S"].sum().round()}")
     print(f"Total de infectados:  {resultado["I"].sum().round()}")
     print(f"Total de Recuperados:  {resultado["R"].sum().round()}")
     print(f"Total de Muertos: {resultado["M"].sum().round()}")

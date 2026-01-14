@@ -67,6 +67,8 @@ class SIR():
 
     def ejecutar(self):
 
+        
+
         sano_a_infectado = self.df["beta"] * self.df["S"] * self.df["I"] / self.df["poblacion"]
         infectado_a_recuperado = self.df["I"] * self.df["gamma"]
         infectado_a_muerto = self.df["I"] * self.df["mu"]
