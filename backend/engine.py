@@ -33,7 +33,6 @@ def avanzar_dia(dataframe):
 
         if sanos_totales <= 0:
             print("Todo el mundo está infectado")
-            return {"status":"ALL WORLD INFECTED"}
         elif infectados_totales <= 0:
             print("El virus se extinguió")
             return {"status":"HUMAN WINS"}
@@ -75,7 +74,6 @@ def avanzar_dia(dataframe):
     print("guardando estados")
     csv.guardar_estados(resultado,infectado)
     print("estados guardados")
-    print(resultado)
     print(f"Total Sanos:  {resultado["S"].sum().round()}")
     print(f"Total de infectados:  {resultado["I"].sum().round()}")
     print(f"Total de Recuperados:  {resultado["R"].sum().round()}")
