@@ -78,10 +78,10 @@ class Loader():
             
             print(datos.loc[datos["I"] > 0]["I"].sum().round())
             diccionario = {
-            "total_S": datos["S"].sum(),
-            "total_R": datos["R"].sum(),            
-            "total_I": datos["I"].sum(),
-            "total_M": datos["M"].sum(),
+            "total_S": datos["S"].sum().round(),
+            "total_R": datos["R"].sum().round(),            
+            "total_I": datos["I"].sum().round(),
+            "total_M": datos["M"].sum().round(),
             "dia": ultimo_dia + 1,
             "Primer_pais": pais,
             "Paises_Infectados": datos.loc[datos["I"] > 0]["I"].sum().round()}
