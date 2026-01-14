@@ -4,21 +4,17 @@ from options import Options as opt
 import sqlite3 as sql
 import random
 
-opt = opt()
 
+opt = opt()    
 csv = Loader(opt.RUTA_CSV)
 db = csv.crear_db()
 conn = sql.connect(opt.RUTA_DB_CREADA)
-
 dataframe = csv.cargar_df()  # Carga el archivo csv
-
 mapa = csv.cargar_mapa(dataframe)
 sir = SIR(mapa_mundo = mapa,df = dataframe)
+    
 
-
-
-def avanzar_dia(dataframe):
-
+def avanzar_dia():
 
     if db == False:
         print("Creando Base de datos")
@@ -82,4 +78,4 @@ def avanzar_dia(dataframe):
     return resultado
 
         
-avanzar_dia(dataframe)
+avanzar_dia()

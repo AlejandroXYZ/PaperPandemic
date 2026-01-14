@@ -84,7 +84,7 @@ class Loader():
             "total_M": datos["M"].sum().round(),
             "dia": ultimo_dia + 1,
             "Primer_pais": pais,
-            "Paises_Infectados": datos.loc[datos["I"] > 0]["I"].sum().round()}
+            "Paises_Infectados": datos.loc[datos["I"] > 0]["I"].count()}
             df = pd.DataFrame([diccionario])
             df.to_sql("historial",conn,if_exists="append",index=False)         
             datos.to_sql("estado_actual",conn,if_exists="replace",index=False)         
