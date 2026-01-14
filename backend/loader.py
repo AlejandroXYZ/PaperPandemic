@@ -29,8 +29,10 @@ class Loader():
         df["S"] = df["poblacion"]
         df["I"] = 0.0
         df["R"] = 0.0
+        df["M"] = 0.0
         df["beta"] = opt.BETA
         df["gamma"] = opt.GAMMA
+        df["mu"] = opt.MU
         return df
 
     def cargar_db(self):
@@ -56,8 +58,8 @@ class Loader():
             print("Creado base de datos")
             conn = sql.connect(opt.RUTA_DB_CREADA)
             cursor = conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER)")
-            cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, Primer_pais TEXT)")        
+            cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER,'M' INTEGER)")
+            cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, total_M INTEGER, Primer_pais TEXT)")        
             conn.commit()
             cursor.close()
             conn.close()
@@ -78,6 +80,7 @@ class Loader():
             "total_S": datos["S"].sum(),
             "total_R": datos["R"].sum(),            
             "total_I": datos["I"].sum(),
+            "total_M": datos["M"].sum(),
             "dia": ultimo_dia + 1,
             "Primer_pais": pais}
             df = pd.DataFrame([diccionario])

@@ -11,6 +11,7 @@ class Options():
     # PARÁMETROS:
     BETA: float = 0.3
     GAMMA: float = 0.1
+    MU: float = 0.1
     INDEX_PAIS_A_INFECTAR: int = 88
 
     # OPCIONES DE INFECCIÓN DURANTE EJECUCIÓN

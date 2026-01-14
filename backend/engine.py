@@ -64,7 +64,9 @@ def avanzar_dia(dataframe):
     csv.guardar_estados(resultado,infectado)
     print("estados guardados")
     print(f"Total de infectados:  {resultado["I"].sum().round()}")
-    print(f"Total países infectados:  {len(sir.df.loc[df["I"] > 0].index.tolist())}")
+    print(f"Total de Recuperados:  {resultado["R"].sum().round()}")
+    print(f"Total de Muertos: {resultado["M"].sum().round()}")
+    print(f"Total países infectados:  {len(sir.df.loc[sir.df["I"] > 0].index.tolist())}")
     return resultado
 
         

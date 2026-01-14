@@ -69,9 +69,12 @@ class SIR():
 
         sano_a_infectado = self.df["beta"] * self.df["S"] * self.df["I"] / self.df["poblacion"]
         infectado_a_recuperado = self.df["I"] * self.df["gamma"]
+        infectado_a_muerto = self.df["I"] * self.df["mu"]
         self.df["S"] = (self.df["S"] - sano_a_infectado)
-        self.df["I"] = (self.df["I"] + sano_a_infectado - infectado_a_recuperado)
+        self.df["I"] = (self.df["I"] + sano_a_infectado - infectado_a_recuperado - infectado_a_muerto)
         self.df["R"] = (self.df["R"] + infectado_a_recuperado)
-        cols_a_redondear = ["S", "I", "R"]
+        self.df["M"] = (self.df["M"] + infectado_a_muerto)
+
+        cols_a_redondear = ["S", "I", "R","M"]
         self.df[cols_a_redondear] = self.df[cols_a_redondear].round(2)        
         return self.df
