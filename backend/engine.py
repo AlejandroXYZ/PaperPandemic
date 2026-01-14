@@ -10,7 +10,7 @@ csv = Loader(opt.RUTA_CSV)
 db = csv.crear_db()
 conn = sql.connect(opt.RUTA_DB_CREADA)
 
-dataframe = csv.cargar_df()
+dataframe = csv.cargar_df()  # Carga el archivo csv
 
 mapa = csv.cargar_mapa(dataframe)
 sir = SIR(mapa_mundo = mapa,df = dataframe)
@@ -25,23 +25,26 @@ def avanzar_dia(dataframe):
         infectado = dataframe.loc[opt.INDEX_PAIS_A_INFECTAR, "Country Name"]
     else:
         print("Base de datos cargada")
-        dataframe = csv.cargar_db()
-        sir.df = dataframe
+        df = csv.cargar_db()
+        sir.df = df
         historial = csv.historial()
         infectado = historial["Primer_pais"].iloc[0] if not historial.empty else "Desconocido"
         vecinos = sir.buscar_vecinos(infectado)
-        if not vecinos:
-            print("El virus está contenido, no hay vecinos sanos cerca")
-        else:
-            for i in vecinos:
-                probabilidad_infectar_vecinos = random.random()
-                if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
-                    sir.infectar(i)
+        pais_infectado = sir.df[sir.df["Country Name"] == infectado]
+        print(pais_infectado["I"].values[0])
+        if pais_infectado["I"].values[0] > opt.UMBRAL_INFECCION_EXTERNO:
+            if not vecinos:
+                print("El virus está contenido, no hay vecinos sanos cerca")
+            else:
+                for i in vecinos:
+                    probabilidad_infectar_vecinos = random.random()
+                    if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
+                        sir.infectar(i)
     resultado = sir.ejecutar()
     print("guardando estados")
     csv.guardar_estados(resultado,infectado)
     print("estados guardados")
-    print(f"Total de infectados:  {resultado["I"].sum()}")
+    print(f"Total de infectados:  {resultado["I"].sum().round()}")
     return resultado
 
         
