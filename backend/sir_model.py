@@ -96,6 +96,7 @@ class SIR():
         # Erradicación
 
         erradicacion = (self.df["I"] > 0) & (self.df["S"] < opt.UMBRAL_ERRADICACION)
+        print(self.df[erradicacion])
 
         if erradicacion.any():
             infectados_restantes = self.df.loc[erradicacion, "I"]
@@ -109,7 +110,6 @@ class SIR():
             self.df.loc[erradicacion, "M"] += muertes_finales
             self.df.loc[erradicacion, "R"] += recuperados_finales
             self.df.loc[erradicacion, "I"] = 0
-            print("Se ha aplicado el protocolo de erradicación en países con casos residuales.")
 
         cols_a_redondear = ["S", "I", "R","M"]
         self.df[cols_a_redondear] = self.df[cols_a_redondear].clip(lower=0)        
