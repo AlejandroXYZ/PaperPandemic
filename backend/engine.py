@@ -103,9 +103,4 @@ class Engine():
         }
 
 
-if __name__ == "__main__":
-    motor = Engine()
-
-    for i in range(10):
-        motor.avanzar_dia()
 

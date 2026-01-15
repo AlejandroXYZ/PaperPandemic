@@ -3,6 +3,8 @@ import pandas as pd
 import sqlite3 as sql
 import os
 from options import Options as opt
+import os
+
 
 opt = opt()
 
@@ -95,3 +97,20 @@ class Loader():
             conn.close()
             print("Ha ocurrido un error mientras se guardaban los estados")
             raise e
+
+
+    def limpiar_db(self):
+        if os.path.exists(opt.RUTA_DB_CREADA):
+            try:
+                os.remove(opt.RUTA_DB_CREADA)
+                return {"mensaje": "Base de datos Borrada exitosamente",
+                        "mensaje":"Simulación reiniciada"},True
+
+            except Exceptiona as e:
+                print("Ha ocurrido un error al eliminar la base de datos")
+                return {"error":e},False
+                
+        else:
+            print("No se encontró la base de datos")
+            return {"mensaje":"No se encontró la base de datos"},False
+                    

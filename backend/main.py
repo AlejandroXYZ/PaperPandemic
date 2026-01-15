@@ -30,6 +30,7 @@ def obtener_resumen():
     total_paises = len(df)
     total_infectados = int(df["I"].sum())
     primer_pais = motor.primer_pais
+    dia = motor.historial["dia"].iloc[-1] if total_infectados > 0 else 0
 
     estado = "En curso" if total_infectados > 0 else "Sin iniciar / Extinto"
     
@@ -38,7 +39,8 @@ def obtener_resumen():
         "paises_infectados": total_paises_infectados,
         "total_poblacion_infectada": total_infectados,
         "primer_pais_origen": primer_pais,
-        "total_paises_mundo": total_paises
+        "total_paises_mundo": total_paises,
+        "dia":dia
     }
 
 
@@ -56,5 +58,10 @@ def avanzar():
 def reiniciar():
     """Reinicia la simulación desde el estado inicial"""
     global motor
-    motor = Engine()
-    return {"mensaje": "Simulación reiniciada"}
+    db, log = motor.csv.limpiar_db()
+
+    if log:
+        motor = Engine()
+        return db
+    else:
+        return db
