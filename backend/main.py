@@ -24,6 +24,7 @@ def home():
 
 @app.get("/resumen")
 def obtener_resumen():
+    """Devuelve los datos actuales de la simulación para pintar el mapa por primera vez"""
     df = motor.sir.df
     total_paises_infectados = len(df[df["I"] > 0])
     total_paises = len(df)
@@ -43,6 +44,7 @@ def obtener_resumen():
 
 @app.post("/avanzar_dia")
 def avanzar():
+    """Avanza un día en la simulación y devuelve los cambios"""
     resultado = motor.avanzar_dia()
     return {
         "mensaje": "Día avanzado correctamente",
@@ -52,6 +54,7 @@ def avanzar():
 
 @app.get("/reiniciar")
 def reiniciar():
+    """Reinicia la simulación desde el estado inicial"""
     global motor
     motor = Engine()
     return {"mensaje": "Simulación reiniciada"}

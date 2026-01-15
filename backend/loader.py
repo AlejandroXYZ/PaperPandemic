@@ -53,7 +53,7 @@ class Loader():
 
         if os.path.exists(opt.RUTA_DB_CREADA):
             print("Cargando base de datos...")
-            return True
+            return False
         else:
             print("Creado base de datos")
             conn = sql.connect(opt.RUTA_DB_CREADA)
@@ -64,7 +64,7 @@ class Loader():
             cursor.close()
             conn.close()
             print("Base de datos creada con éxito")
-            return False
+            return True
 
     def guardar_estados(self,datos,pais):
         try:
