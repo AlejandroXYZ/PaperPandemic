@@ -103,4 +103,6 @@ class Engine():
         }
 
 
-
+if __name__ == "__main__":
+    motor = Engine()
+    motor.avanzar_dia()
