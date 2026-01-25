@@ -1,0 +1,11 @@
+# Nombre del módulo
+module UI.Components
+
+# Registro de componentes individuales:
+# [Nombre del Tipo] [Versión] [Nombre del archivo .qml]
+
+# CustomButton 1.0 CustomButton.qml
+# Sidebar 1.0 Sidebar.ui.qml
+# CustomInput 1.0 CustomInput.qml
+
+
