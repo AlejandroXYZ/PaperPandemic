@@ -30,6 +30,7 @@ Item {
         id: mapContainer
         width: 1000
         height: 800
+        scale: 0.8
         transformOrigin: Item.Center 
 
         DragHandler {
@@ -62,7 +63,7 @@ Item {
                 containsMode: Shape.FillContains 
 
                 ShapePath {
-                    strokeWidth: 2
+                    strokeWidth: 1
                     strokeColor: "#ffffff"
                     fillRule: ShapePath.WindingFill 
 
