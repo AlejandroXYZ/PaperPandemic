@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import pandas as pd
 import sqlite3 as sql
 import os
-from options import Options as opt
+from backend.options import Options as opt
 import os
 
 
@@ -17,7 +17,6 @@ class Loader():
         return paises
     
     def cargar_df(self):
-        print("Cargando el archivo csv")
         df = pd.read_csv(opt.RUTA_CSV)
         if df["poblacion"].dtype == 'object':
             df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
@@ -54,10 +53,8 @@ class Loader():
     def crear_db(self):
 
         if os.path.exists(opt.RUTA_DB_CREADA):
-            print("Cargando base de datos...")
             return False
         else:
-            print("Creado base de datos")
             conn = sql.connect(opt.RUTA_DB_CREADA)
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER,'M' INTEGER)")
@@ -65,7 +62,6 @@ class Loader():
             conn.commit()
             cursor.close()
             conn.close()
-            print("Base de datos creada con éxito")
             return True
 
     def guardar_estados(self,datos,pais):
@@ -78,7 +74,6 @@ class Loader():
             else:
                 ultimo_dia = 0 
             
-            print(datos.loc[datos["I"] > 0]["I"].sum().round())
             diccionario = {
             "total_S": datos["S"].sum().round(),
             "total_R": datos["R"].sum().round(),            
@@ -95,7 +90,6 @@ class Loader():
 
         except Exception as e:
             conn.close()
-            print("Ha ocurrido un error mientras se guardaban los estados")
             raise e
 
 
@@ -107,10 +101,8 @@ class Loader():
                         "mensaje":"Simulación reiniciada"},True
 
             except Exceptiona as e:
-                print("Ha ocurrido un error al eliminar la base de datos")
                 return {"error":e},False
                 
         else:
-            print("No se encontró la base de datos")
             return {"mensaje":"No se encontró la base de datos"},False
                     

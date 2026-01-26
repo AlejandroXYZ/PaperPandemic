@@ -2,7 +2,7 @@ import pandas as pd
 from dataclasses import dataclass
 import sqlite3 as sql
 import random
-from options import Options as opt
+from backend.options import Options as opt
 
 opt = opt()
 
@@ -20,7 +20,6 @@ class SIR():
         nombre_pais = self.df.loc[paciente_cero_index, "Country Name"]
         self.df.loc[paciente_cero_index,"S"] -= infectados_reales
         self.df.loc[paciente_cero_index,"I"] += infectados_reales
-        print(f"El virus ha comenzado en: {nombre_pais}")  
         return nombre_pais
 
     def infectar(self,index): 
@@ -30,12 +29,10 @@ class SIR():
         sanos_disponibles = self.df.loc[index, "S"]
                 
         if sanos_disponibles <= 0:
-            print("Entro a sanos disponibles")
             return None 
         infectados_reales = min(infectados_iniciales, sanos_disponibles)
         self.df.loc[index,"S"] -= infectados_reales
         self.df.loc[index,"I"] += infectados_reales
-        print(f"El virus ha comenzado en {nombre_pais}")        
         return nombre_pais
 
     
@@ -96,7 +93,6 @@ class SIR():
         # Erradicación
 
         erradicacion = (self.df["I"] > 0) & (self.df["S"] < opt.UMBRAL_ERRADICACION)
-        print(self.df[erradicacion])
 
         if erradicacion.any():
             infectados_restantes = self.df.loc[erradicacion, "I"]

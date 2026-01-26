@@ -1,9 +1,9 @@
-from sir_model import SIR
-from loader import Loader
-from options import Options as opt
+from backend.sir_model import SIR
+from backend.loader import Loader
+from backend.options import Options as opt
 import sqlite3 as sql
 import random
-
+import numpy as np
 
 class Engine():
 
@@ -24,22 +24,18 @@ class Engine():
     def avanzar_dia(self):
 
         if self.db and self.dataframe["I"].sum() == 0:
-            print("Creando Base de datos")
             self.sir.infectar_primera_vez()
             self.primer_pais = self.dataframe.loc[opt.INDEX_PAIS_A_INFECTAR, "Country Name"]
             self.db = False 
 
         else:
-            print("Base de datos cargada")        
             sanos_totales = self.dataframe["S"].sum()
             infectados_totales = self.dataframe["I"].sum()
             status = "Jugando"
 
             if sanos_totales <= 0:
-                print("Todo el mundo está infectado")
                 status = "Virus Gana"
             elif infectados_totales < 0:
-                print("El virus se extinguió")
                 status = "Humanos Ganan"
 
             if status != "Jugando":
@@ -59,6 +55,8 @@ class Engine():
                         if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
                                 self.sir.infectar(i)
 
+
+
             victimas_aereas,amenazas_aereas = self.sir.buscar_vuelos_y_puertos("vuelo")
             if amenazas_aereas > 0:
                 riesgo_actual = opt.PROBABILIDAD_INFECTAR_VUELO * (1 + (amenazas_aereas * 0.1))
@@ -68,7 +66,6 @@ class Engine():
                     dado = random.random()
                     if dado < riesgo_actual:
                         self.sir.infectar(victima)
-                        print(f"Contagio Aéreo, un avión infectó a {self.sir.df.at[victima,'Country Name']}")
                 
 
             victimas_mar,amenazas_puertos = self.sir.buscar_vuelos_y_puertos("puerto")
@@ -78,17 +75,8 @@ class Engine():
                 for victima in victimas_mar:
                     if random.random() < riesgo_actual:
                         self.sir.infectar(victima)            
-                        print(f"Contagio marítimo, un barco a infectado a {self.sir.df.at[victima,'Country Name']}")
 
         resultado = self.sir.ejecutar()
-        print("guardando estados")
-        self.csv.guardar_estados(resultado,self.primer_pais)
-        print("estados guardados")
-        print(f"Total Sanos:  {resultado["S"].sum().round()}")
-        print(f"Total de infectados:  {resultado["I"].sum().round()}")
-        print(f"Total de Recuperados:  {resultado["R"].sum().round()}")
-        print(f"Total de Muertos: {resultado["M"].sum().round()}")
-        print(f"Total países infectados:  {len(self.sir.df.loc[self.sir.df["I"] > 0].index.tolist())}")
 
 
         return {

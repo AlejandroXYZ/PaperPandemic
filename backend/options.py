@@ -1,11 +1,15 @@
 from dataclasses import dataclass
+import os
+
 
 @dataclass
 class Options():
 
-    # RUTAS DE ARCHIVOS
-    RUTA_CSV:str = "data/poblacion.csv"
-    RUTA_DB_CREADA:str = "data/mundo.db"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+    RUTA_DB_CREADA = os.path.join(BASE_DIR, "data", "mundo.db")
+    RUTA_CSV = os.path.join(BASE_DIR, "data", "poblacion.csv")
 
 
     # PARÁMETROS:

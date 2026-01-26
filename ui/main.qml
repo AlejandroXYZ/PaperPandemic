@@ -11,20 +11,36 @@ ApplicationWindow {
     color: "#121212"
 
     // 1. BARRA SUPERIOR
-    header: BarraSuperior {
-        id: barraSup
+header: BarraSuperior {
         onMenuClicked: opcionesDrawer.opened ? opcionesDrawer.close() : opcionesDrawer.open()
-        onPlayPauseClicked: (isPlaying) => { console.log("Simulación: " + (isPlaying ? "PLAY" : "PAUSE")) }
-        onResetClicked: { console.log("Simulación REINICIADA") }
+        
+        // --- CONEXIÓN AL BACKEND ---
+        // Cuando se hace clic en Play/Pause, llamamos a la función de Python
+        onPlayPauseClicked: (isPlaying) => { 
+            console.log("QML enviando señal de Play/Pause..."); // Log en QML
+            backend.toggle_simulacion(isPlaying); // Llamada a Python
+        }
+        
+        onResetClicked: { 
+            console.log("QML enviando señal de Reinicio...");
+            backend.reiniciar(); 
+        }
     }
 
     // --- NUEVO: 2. BARRA INFERIOR DE ESTADO Y NOTICIAS ---
-    footer: BarraInferior {
+   footer: BarraInferior {
         id: barraInf
-        // Aquí podrás enlazar datos de Python después. Ej:
-        // infectados: modeloPython.totalInfectados
+        
+        dia: backend ? backend.dia : 1
+        sanos: backend ? backend.sanos : 0
+        infectados: backend ? backend.infectados : 0
+        recuperados: backend ? backend.recuperados : 0
+        muertos: backend ? backend.muertos : 0
+        paisesInfectados: backend ? backend.paisesInfectados : 0
+        noticiaActual: backend ? backend.noticia : "Cargando..."
     }
 
+    
     // 3. VENTANA LATERAL (Menú)
     MenuOpciones {
         id: opcionesDrawer
