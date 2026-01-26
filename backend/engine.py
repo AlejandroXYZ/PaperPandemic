@@ -48,33 +48,46 @@ class Engine():
         if self.primer_pais:
             vecinos = self.sir.buscar_vecinos(self.primer_pais)
             pais_infectado = self.sir.df[self.sir.df["Country Name"] == self.primer_pais]
+            
             if pais_infectado["I"].values[0] > opt.UMBRAL_INFECCION_EXTERNO:
                 if vecinos:
-                    for i in vecinos:
-                        probabilidad_infectar_vecinos = random.random()
-                        if probabilidad_infectar_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA:
-                                self.sir.infectar(i)
+                    # 1. Convertimos la lista de vecinos a un array de NumPy
+                    vecinos_array = np.array(vecinos)
 
+                    # 2. Tiramos los dados para todos los vecinos de un solo golpe
+                    dados_vecinos = np.random.random(len(vecinos_array))
 
+                    # 3. Filtramos a los vecinos que tuvieron mala suerte
+                    vecinos_a_infectar = vecinos_array[dados_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA]
 
-            victimas_aereas,amenazas_aereas = self.sir.buscar_vuelos_y_puertos("vuelo")
-            if amenazas_aereas > 0:
+                    # 4. Usamos la nueva función ultra-rápida
+                    self.sir.infectar_multiples(vecinos_a_infectar)
+
+            victimas_aereas, amenazas_aereas = self.sir.buscar_vuelos_y_puertos("vuelo")
+            
+            victimas_aereas = np.array(victimas_aereas) 
+
+            if amenazas_aereas > 0 and len(victimas_aereas) > 0:
                 riesgo_actual = opt.PROBABILIDAD_INFECTAR_VUELO * (1 + (amenazas_aereas * 0.1))
-                riesgo_actual = min(riesgo_actual,0.5)
+                riesgo_actual = min(riesgo_actual, 0.5)
 
-                for victima in victimas_aereas:
-                    dado = random.random()
-                    if dado < riesgo_actual:
-                        self.sir.infectar(victima)
-                
+                dados = np.random.random(len(victimas_aereas))
 
-            victimas_mar,amenazas_puertos = self.sir.buscar_vuelos_y_puertos("puerto")
-            if amenazas_puertos > 0:
+                infectados_aereos = victimas_aereas[dados < riesgo_actual]
+
+                self.sir.infectar_multiples(infectados_aereos)
+
+            victimas_mar, amenazas_puertos = self.sir.buscar_vuelos_y_puertos("puerto")
+            victimas_mar = np.array(victimas_mar)
+
+            if amenazas_puertos > 0 and len(victimas_mar) > 0:
                 riesgo_actual = opt.PROBABILIDAD_INFECTAR_PUERTO * (1 + (amenazas_puertos * 0.05))
-                riesgo_actual = min(riesgo_actual,0.3)
-                for victima in victimas_mar:
-                    if random.random() < riesgo_actual:
-                        self.sir.infectar(victima)            
+                riesgo_actual = min(riesgo_actual, 0.3)
+
+                dados = np.random.random(len(victimas_mar))
+                infectados_maritimos = victimas_mar[dados < riesgo_actual]
+
+                self.sir.infectar_multiples(infectados_maritimos)
 
         resultado = self.sir.ejecutar()
 
