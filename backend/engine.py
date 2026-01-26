@@ -20,6 +20,12 @@ class Engine():
             self.primer_pais = self.historial["Primer_pais"].iloc[0] if not self.historial.empty else "Desconocido"
         self.mapa = self.csv.cargar_mapa(self.dataframe)
         self.sir = SIR(mapa_mundo = self.mapa,df = self.dataframe)
+        if self.primer_pais:
+            print("Cargando geografía de fronteras...")
+            vecinos = self.sir.buscar_vecinos(self.primer_pais)
+            self.indices_vecinos_zona_cero = np.array(vecinos) if vecinos else np.array([])
+        else:
+            self.indices_vecinos_zona_cero = np.array([])
     
     def avanzar_dia(self):
 
@@ -46,21 +52,14 @@ class Engine():
                 }
 
         if self.primer_pais:
-            vecinos = self.sir.buscar_vecinos(self.primer_pais)
-            pais_infectado = self.sir.df[self.sir.df["Country Name"] == self.primer_pais]
-            
-            if pais_infectado["I"].values[0] > opt.UMBRAL_INFECCION_EXTERNO:
-                if vecinos:
-                    # 1. Convertimos la lista de vecinos a un array de NumPy
-                    vecinos_array = np.array(vecinos)
-
-                    # 2. Tiramos los dados para todos los vecinos de un solo golpe
-                    dados_vecinos = np.random.random(len(vecinos_array))
-
-                    # 3. Filtramos a los vecinos que tuvieron mala suerte
-                    vecinos_a_infectar = vecinos_array[dados_vecinos < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA]
-
-                    # 4. Usamos la nueva función ultra-rápida
+            idx_zona_cero = opt.INDEX_PAIS_A_INFECTAR
+            infectados_zona_cero = self.sir.df.at[idx_zona_cero, "I"]
+                    
+            if infectados_zona_cero > opt.UMBRAL_INFECCION_EXTERNO:
+                vecinos = self.indices_vecinos_zona_cero
+                if len(vecinos) > 0:
+                    dados = np.random.random(len(vecinos))
+                    vecinos_a_infectar = vecinos[dados < opt.PROBABILIDAD_INFECTAR_VECINOS_FRONTERA]
                     self.sir.infectar_multiples(vecinos_a_infectar)
 
             victimas_aereas, amenazas_aereas = self.sir.buscar_vuelos_y_puertos("vuelo")
