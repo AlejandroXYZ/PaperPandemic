@@ -46,6 +46,7 @@ class MapaModeloSIRD(QAbstractListModel):
 
 
     def actualizar_datos(self, lista_paises):
+        # 1. Si es la primera vez, construimos la lista (esto no cambia)
         if not self.paises:
             self.beginResetModel()
             for fila in lista_paises:
@@ -59,17 +60,37 @@ class MapaModeloSIRD(QAbstractListModel):
                         "recuperado": int(fila["R"])
                     })
             self.endResetModel()
-        else:
-            diccionario_datos = {fila["Country Code"]: fila for fila in lista_paises}
-            
-                        # Actualizamos los números de cada país
-            for pais in self.paises:
-                codigo = pais["codigo"]
-                if codigo in diccionario_datos:
-                    fila_nueva = diccionario_datos[codigo]
-                    pais["infectado"] = int(fila_nueva["I"])
-                    pais["recuperado"] = int(fila_nueva["R"])
-            
-            top_left = self.index(0, 0)
-            bottom_right = self.index(len(self.paises) - 1, 0)
-            self.dataChanged.emit(top_left, bottom_right)
+            return
+
+        # 2. Convertimos la lista nueva a diccionario para acceso rápido
+        diccionario_datos = {fila["Country Code"]: fila for fila in lista_paises}
+        
+        # Variables para detectar el rango de cambios
+        hay_cambios = False
+        indice_min = len(self.paises)
+        indice_max = 0
+
+        # 3. Actualizamos los datos en MEMORIA (esto es rapidísimo, no toca la interfaz)
+        for i, pais in enumerate(self.paises):
+            codigo = pais["codigo"]
+            if codigo in diccionario_datos:
+                fila_nueva = diccionario_datos[codigo]
+                nuevos_infectados = int(fila_nueva["I"])
+                nuevos_recuperados = int(fila_nueva["R"])
+
+                # Solo marcamos si hubo cambio real
+                if pais["infectado"] != nuevos_infectados or pais["recuperado"] != nuevos_recuperados:
+                    pais["infectado"] = nuevos_infectados
+                    pais["recuperado"] = nuevos_recuperados
+                    
+                    hay_cambios = True
+                    if i < indice_min: indice_min = i
+                    if i > indice_max: indice_max = i
+
+        # 4. EL SECRETO: Emitimos UNA SOLA señal al final
+        # Solo si hubo cambios, le decimos a QML: "Redibuja desde el índice X hasta el Y"
+        if hay_cambios:
+            top_left = self.index(indice_min, 0)
+            bottom_right = self.index(indice_max, 0)
+            # El tercer argumento le dice a QML que SOLO revise los colores, no la geometría
+            self.dataChanged.emit(top_left, bottom_right, [self.InfectadoRole, self.RecuperadoRole])
