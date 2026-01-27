@@ -31,11 +31,23 @@ class ControladorSIRD(QObject):
         # 4. Configuramos el Temporizador (QTimer)
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick_simulacion)
-        self.velocidad_ms = 1000 # 1000ms = 1 segundo por día
+        self.velocidad_ms = 1500 # 1000ms = 1 segundo por día
 
-    # ==========================================================
-    # FUNCIONES INTERNAS (Lógica de simulación)
-    # ==========================================================
+
+    def _calcular_color_hex(self, infectados, poblacion):
+        """Convierte gravedad de infección a color HEX (Verde -> Rojo)"""
+        if infectados == 0:
+            return "#D1D5DB" # Gris (Sano)
+        
+        porcentaje = infectados / poblacion
+        
+        # LÓGICA DE COLORES (Aquí puedes poner la complejidad que quieras, es Python!)
+        if porcentaje < 0.01: return "#FCD34D" # Amarillo (Brote inicial)
+        if porcentaje < 0.10: return "#F97316" # Naranja (Contagio)
+        if porcentaje < 0.30: return "#EF4444" # Rojo Claro (Peligro)
+        return "#7F1D1D" # Rojo Sangre Oscuro (Colapso)
+
+
     def _actualizar_estadisticas_iniciales(self):
         """Lee los totales directamente del DataFrame inicial de Pandas"""
         df = self.motor.dataframe
@@ -54,6 +66,9 @@ class ControladorSIRD(QObject):
         print(f"⏱️ Backend tardó: {milisegundos:.2f} ms") # Muestra el tiempo en terminal
         totales = resultado["totales"]
         datos_paises = resultado["datos"] # Lista de diccionarios
+        for pais in datos_paises:
+            color = self._calcular_color_hex(pais["I"], pais["poblacion"])
+            pais["color_calculado"] = color
         
         # Actualizamos variables de estado
         self._dia += 1

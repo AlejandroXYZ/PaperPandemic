@@ -66,10 +66,7 @@ Item {
                     strokeWidth: 1
                     strokeColor: "#ffffff"
                     fillRule: ShapePath.WindingFill 
-
-                    fillColor: mouseArea.containsMouse ? "#BDD7DA" : 
-                               (model.infectado > 1 ? "#ffb8b8" : "#A2C8E7")
-
+                    fillColor: mouseArea.containsMouse ? "#BDD7DA" : model.color_pais
                     PathSvg { path: model.path } 
                 }
 

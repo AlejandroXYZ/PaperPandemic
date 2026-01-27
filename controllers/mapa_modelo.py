@@ -1,4 +1,4 @@
-from PySide6.QtCore import QAbstractListModel, Qt, QModelIndex
+from PySide6.QtCore import QAbstractListModel, Qt
 import json
 import os
 
@@ -8,15 +8,17 @@ class MapaModeloSIRD(QAbstractListModel):
     PathRole = Qt.UserRole + 3
     InfectadoRole = Qt.UserRole + 4
     RecuperadoRole = Qt.UserRole + 5
+    # --- NUEVO: DEFINIMOS EL ROL PARA EL COLOR ---
+    ColorRole = Qt.UserRole + 6 
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.paises = []
-
+        
+        # Carga del JSON (Ruta a prueba de balas)
         BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         json_path = os.path.join(BASE_DIR, "ui", "assets", "paises.json")
-        
-        # Cargamos la geometría (los dibujos SVG) del mapa una sola vez
+
         with open(json_path) as f:
             self.geometria = json.load(f)
 
@@ -26,7 +28,9 @@ class MapaModeloSIRD(QAbstractListModel):
             self.NombreRole: b"nombre",
             self.PathRole: b"path",
             self.InfectadoRole: b"infectado",
-            self.RecuperadoRole: b"recuperado"
+            self.RecuperadoRole: b"recuperado",
+            # --- NUEVO: LE DECIMOS A QML QUE USE EL NOMBRE "color_pais" ---
+            self.ColorRole: b"color_pais"
         }
 
     def rowCount(self, parent=None):
@@ -41,12 +45,17 @@ class MapaModeloSIRD(QAbstractListModel):
         if role == self.PathRole: return pais["path"]
         if role == self.InfectadoRole: return pais["infectado"]
         if role == self.RecuperadoRole: return pais["recuperado"]
+        
+        # --- NUEVO: RETORNAMOS EL COLOR HEXADECIMAL ---
+        if role == self.ColorRole: return pais.get("color", "#D1D5DB") # Gris por defecto
+        
         return None
 
-
-
+    # ==========================================================
+    # FUNCIÓN DE ACTUALIZACIÓN (OPTIMIZADA PARA ATOM)
+    # ==========================================================
     def actualizar_datos(self, lista_paises):
-        # 1. Si es la primera vez, construimos la lista (esto no cambia)
+        # 1. CARGA INICIAL (Solo ocurre una vez al arrancar)
         if not self.paises:
             self.beginResetModel()
             for fila in lista_paises:
@@ -57,40 +66,64 @@ class MapaModeloSIRD(QAbstractListModel):
                         "nombre": fila["Country Name"],
                         "path": self.geometria[codigo],
                         "infectado": int(fila["I"]),
-                        "recuperado": int(fila["R"])
+                        "recuperado": int(fila["R"]),
+                        # Guardamos el color que calculó Python
+                        "color": fila.get("color_calculado", "#D1D5DB") 
                     })
             self.endResetModel()
             return
 
-        # 2. Convertimos la lista nueva a diccionario para acceso rápido
+        # 2. ACTUALIZACIÓN EN TIEMPO REAL (Batch Update)
+        # Convertimos la lista nueva a diccionario para acceso instantáneo
         diccionario_datos = {fila["Country Code"]: fila for fila in lista_paises}
+        cambios = []
         
-        # Variables para detectar el rango de cambios
-        hay_cambios = False
+        hay_cambios_visuales = False
         indice_min = len(self.paises)
         indice_max = 0
 
-        # 3. Actualizamos los datos en MEMORIA (esto es rapidísimo, no toca la interfaz)
         for i, pais in enumerate(self.paises):
             codigo = pais["codigo"]
             if codigo in diccionario_datos:
                 fila_nueva = diccionario_datos[codigo]
-                nuevos_infectados = int(fila_nueva["I"])
-                nuevos_recuperados = int(fila_nueva["R"])
+                
+                # Obtenemos los nuevos valores
+                nuevo_infectado = int(fila_nueva["I"])
+                nuevo_recuperado = int(fila_nueva["R"])
+                nuevo_color = fila_nueva.get("color_calculado", "#D1D5DB")
 
-                # Solo marcamos si hubo cambio real
-                if pais["infectado"] != nuevos_infectados or pais["recuperado"] != nuevos_recuperados:
-                    pais["infectado"] = nuevos_infectados
-                    pais["recuperado"] = nuevos_recuperados
-                    
-                    hay_cambios = True
+                # Actualizamos siempre los datos numéricos en memoria
+                pais["infectado"] = nuevo_infectado
+                pais["recuperado"] = nuevo_recuperado
+
+                # --- EL FILTRO DE RENDIMIENTO ---
+                # Solo avisamos a la tarjeta gráfica si cambió el COLOR
+                if pais.get("color") != nuevo_color:
+                    pais["color"] = nuevo_color # Actualizamos color en memoria
+                    cambios.append(i)
+                    hay_cambios_visuales = True
                     if i < indice_min: indice_min = i
                     if i > indice_max: indice_max = i
 
-        # 4. EL SECRETO: Emitimos UNA SOLA señal al final
-        # Solo si hubo cambios, le decimos a QML: "Redibuja desde el índice X hasta el Y"
-        if hay_cambios:
+
+        cantidad_cambios = len(cambios)
+
+        if cantidad_cambios == 0:
+            return
+
+        if cantidad_cambios < 10: 
+            for i in cambios:
+                idx = self.index(i, 0)
+                self.dataChanged.emit(idx, idx, [self.ColorRole])
+
+        else:
+            min_idx = min(cambios)
+            max_idx = max(cambios)
+            top_left = self.index(min_idx, 0)
+            bottom_right = self.index(max_idx, 0)
+            self.dataChanged.emit(top_left, bottom_right, [self.ColorRole])        
+
+        if hay_cambios_visuales:
             top_left = self.index(indice_min, 0)
             bottom_right = self.index(indice_max, 0)
-            # El tercer argumento le dice a QML que SOLO revise los colores, no la geometría
-            self.dataChanged.emit(top_left, bottom_right, [self.InfectadoRole, self.RecuperadoRole])
+            self.dataChanged.emit(top_left, bottom_right, [self.ColorRole, self.InfectadoRole])
