@@ -10,14 +10,14 @@ ToolBar {
     // ========================================================
     // PROPIEDADES 
     // ========================================================
-    property int dia: 1
+    property string dia: "1"
     property int paisesInfectados: 1
     property string noticiaActual: "Se reporta una misteriosa enfermedad respiratoria."
 
-    property double sanos: 7800000000 
-    property double infectados: 1
-    property double recuperados: 0
-    property double muertos: 0
+    property real sanos: 7800000000 
+    property real infectados: 1
+    property real recuperados: 0
+    property real muertos: 0
 
     // ========================================================
     // COMPONENTE DATO CORREGIDO (Sin conflictos de anclaje)

@@ -31,7 +31,7 @@ header: BarraSuperior {
    footer: BarraInferior {
         id: barraInf
         
-        dia: backend ? backend.dia : 1
+        dia: backend ? backend.dia : "1"
         sanos: backend ? backend.sanos : 0
         infectados: backend ? backend.infectados : 0
         recuperados: backend ? backend.recuperados : 0

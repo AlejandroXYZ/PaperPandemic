@@ -1,32 +1,84 @@
-from dataclasses import dataclass
+from PySide6.QtCore import QObject, Signal, Property
 import os
 
-
-@dataclass
-class Options():
-
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-    RUTA_DB_CREADA = os.path.join(BASE_DIR, "data", "mundo.db")
-    RUTA_CSV = os.path.join(BASE_DIR, "data", "poblacion.csv")
-
-
-    # PARÁMETROS:
-    BETA: float = 0.5
-    GAMMA: float = 0.02
-    MU: float = 0.005
-    INDEX_PAIS_A_INFECTAR: int = 88
-
-    # OPCIONES DE INFECCIÓN DURANTE EJECUCIÓN
-    PROBABILIDAD_INFECTAR_VECINOS_FRONTERA: float = 1.0
-    PROBABILIDAD_INFECTAR_VUELO: float = 1.0
-    PROBABILIDAD_INFECTAR_PUERTO:float = 1.0
-    INFECTADOS_INICIALES: int = 2
-    INFECTADOS_INICIALES_VECINOS: int = 1
-    UMBRAL_INFECCION_EXTERNO : int = 500
-    UMBRAL_ERRADICACION: int = 10
-
+class Options(QObject):
+    # =========================================================
+    # 1. CONSTANTES DE RUTA (Arreglado para carpeta 'backend')
+    # =========================================================
     
+    # Obtenemos la ruta absoluta de la carpeta donde está ESTE archivo (backend/)
+    _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+    
+    # Construimos las rutas apuntando a la carpeta 'data' dentro de 'backend'
+    RUTA_DB_CREADA = os.path.join(_BACKEND_DIR, "data", "mundo.db")
+    RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
 
+    # Constantes fijas del juego
+    INDEX_PAIS_A_INFECTAR = 88
+    INFECTADOS_INICIALES = 2
+    INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
+    UMBRAL_INFECCION_EXTERNO = 500
+    UMBRAL_ERRADICACION = 10
 
+    # =========================================================
+    # 2. SEÑALES
+    # =========================================================
+    betaChanged = Signal(float)
+    gammaChanged = Signal(float)
+    muChanged = Signal(float)
+    pFronteraChanged = Signal(float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Debug: Imprimimos la ruta para que verifiques en consola
+        print(f"📁 BUSCANDO DATOS EN: {self.RUTA_CSV}")
+
+        # =====================================================
+        # 3. VARIABLES DINÁMICAS
+        # =====================================================
+        self._beta = 0.5
+        self._gamma = 0.02
+        self._mu = 0.005
+        self._p_frontera = 1.0
+        
+        # Probabilidades extra
+        self.PROBABILIDAD_INFECTAR_VUELO = 1.0
+        self.PROBABILIDAD_INFECTAR_PUERTO = 1.0
+
+    # --- GETTERS Y SETTERS ---
+    @Property(float, notify=betaChanged)
+    def beta(self): return self._beta
+
+    @beta.setter
+    def beta(self, val):
+        if self._beta != val:
+            self._beta = val
+            self.betaChanged.emit(val)
+
+    @Property(float, notify=gammaChanged)
+    def gamma(self): return self._gamma
+
+    @gamma.setter
+    def gamma(self, val):
+        if self._gamma != val:
+            self._gamma = val
+            self.gammaChanged.emit(val)
+
+    @Property(float, notify=muChanged)
+    def mu(self): return self._mu
+
+    @mu.setter
+    def mu(self, val):
+        if self._mu != val:
+            self._mu = val
+            self.muChanged.emit(val)
+
+    @Property(float, notify=pFronteraChanged)
+    def p_frontera(self): return self._p_frontera
+
+    @p_frontera.setter
+    def p_frontera(self, val):
+        if self._p_frontera != val:
+            self._p_frontera = val
+            self.pFronteraChanged.emit(val)
