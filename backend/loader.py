@@ -1,116 +1,165 @@
-from dataclasses import dataclass
 import pandas as pd
 import sqlite3 as sql
 import os
-from options import Options as opt
-import os
 
+class Loader:
+    def __init__(self, opt_instance):
+        self.opt = opt_instance
 
-opt = opt()
+    def _reparar_columnas(self, df):
+        """Asegura que existan las columnas críticas"""
+        columnas_texto = ["vuelo", "puerto", "vecinos", "Country Code", "Country Name"]
+        for col in columnas_texto:
+            if col not in df.columns:
+                df[col] = "No"
+        return df
 
-@dataclass
-class Loader():
-    csv : str
-
-    def cargar_mapa(self,df):
-        paises = dict(zip(df["Country Name"], df.index))
-        return paises
+    def cargar_mapa(self, df):
+        if "Country Name" not in df.columns: return {}
+        return dict(zip(df["Country Name"], df.index))
     
     def cargar_df(self):
-        print("Cargando el archivo csv")
-        df = pd.read_csv(opt.RUTA_CSV)
-        if df["poblacion"].dtype == 'object':
-            df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
+        # Intentar cargar CSV
+        if not os.path.exists(self.opt.RUTA_CSV):
+            print(f"❌ ERROR: No existe {self.opt.RUTA_CSV}")
+            return pd.DataFrame(columns=["Country Name", "poblacion", "vuelo", "puerto", "vecinos", "S", "I", "R", "M", "beta", "gamma", "mu"])
+
+        try:
+            df = pd.read_csv(self.opt.RUTA_CSV)
+        except Exception as e:
+            print(f"❌ ERROR leyendo CSV: {e}")
+            return pd.DataFrame()
         
-        df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce')
-        df = df.dropna(subset=["poblacion"])
-        df = df.dropna(subset=["Country Name"])
-        df["poblacion"] = df["poblacion"].astype(int)
+        # Limpieza y Tipos
+        if "poblacion" in df.columns:
+            if df["poblacion"].dtype == 'object':
+                df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
+            df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce').fillna(0).astype(int)
+            df = df[df["poblacion"] > 0] # Eliminar países sin gente
+        
+        if "Country Name" in df.columns:
+            df = df.dropna(subset=["Country Name"])
 
+        df = self._reparar_columnas(df)
 
+        # Inicialización de Modelo
         df["S"] = df["poblacion"]
-        df["I"] = 0.0
-        df["R"] = 0.0
-        df["M"] = 0.0
-        df["beta"] = opt.BETA
-        df["gamma"] = opt.GAMMA
-        df["mu"] = opt.MU
+        df["I"] = 0
+        df["R"] = 0
+        df["M"] = 0
+        
+        # Parámetros iniciales
+        df["beta"] = self.opt.beta
+        df["gamma"] = self.opt.gamma
+        df["mu"] = self.opt.mu
+        
+        # Conversión a string segura
+        df["vuelo"] = df["vuelo"].astype(str)
+        df["puerto"] = df["puerto"].astype(str)
+        
         return df
 
     def cargar_db(self):
-        conn = sql.connect(opt.RUTA_DB_CREADA)
-        df = pd.read_sql("SELECT * FROM estado_actual",conn)
-        conn.close()
-        return df
-
+        try:
+            conn = sql.connect(self.opt.RUTA_DB_CREADA)
+            df = pd.read_sql("SELECT * FROM estado_actual", conn)
+            conn.close()
+            
+            if df.empty: raise Exception("DB Vacía")
+            
+            df = self._reparar_columnas(df)
+            # Actualizar tasas con los sliders actuales
+            df["beta"] = self.opt.beta
+            df["gamma"] = self.opt.gamma
+            df["mu"] = self.opt.mu
+            return df
+        except:
+            print("⚠️ DB vacía o corrupta. Recargando desde CSV...")
+            return self.cargar_df() # Fallback al CSV
 
     def historial(self):
-        conn = sql.connect(opt.RUTA_DB_CREADA)
-        df = pd.read_sql("SELECT * FROM historial",conn)
-        conn.close()
-        return df
-
+        try:
+            conn = sql.connect(self.opt.RUTA_DB_CREADA)
+            df = pd.read_sql("SELECT * FROM historial", conn)
+            conn.close()
+            return df
+        except:
+            return pd.DataFrame()
         
     def crear_db(self):
+        """Crea la DB y LA RELLENA INMEDIATAMENTE con el CSV"""
+        os.makedirs(os.path.dirname(self.opt.RUTA_DB_CREADA), exist_ok=True)
 
-        if os.path.exists(opt.RUTA_DB_CREADA):
-            print("Cargando base de datos...")
-            return False
-        else:
-            print("Creado base de datos")
-            conn = sql.connect(opt.RUTA_DB_CREADA)
-            cursor = conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS estado_actual ( 'Country Name' TEXT PRIMARY KEY, 'poblacion' INTEGER,'S' INTEGER , 'I' INTEGER, 'R' INTEGER,'M' INTEGER)")
-            cursor.execute("CREATE TABLE IF NOT EXISTS historial( dia TEXT PRIMARY KEY, total_I INTEGER, total_S INTEGER, total_R INTEGER, total_M INTEGER, Primer_pais TEXT, Paises_Infectados INTEGER)")        
-            conn.commit()
-            cursor.close()
-            conn.close()
-            print("Base de datos creada con éxito")
-            return True
-
-    def guardar_estados(self,datos,pais):
-        try:
-            conn = sql.connect(opt.RUTA_DB_CREADA)
-            df_ultimo = pd.read_sql_query("SELECT dia FROM historial ORDER BY ROWID DESC LIMIT 1", conn)
-            
-            if not df_ultimo.empty:
-                ultimo_dia = int(df_ultimo.iloc[0, 0])
+        conn = sql.connect(self.opt.RUTA_DB_CREADA)
+        cursor = conn.cursor()
+        
+        # 1. Crear Tablas
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS estado_actual (
+                'Country Name' TEXT, 'Country Code' TEXT, 'poblacion' INTEGER,
+                'vuelo' TEXT, 'puerto' TEXT, 'vecinos' TEXT,
+                'S' INTEGER, 'I' INTEGER, 'R' INTEGER, 'M' INTEGER,
+                'beta' REAL, 'gamma' REAL, 'mu' REAL
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historial( 
+                dia TEXT, total_I INTEGER, total_S INTEGER, 
+                total_R INTEGER, total_M INTEGER, 
+                Primer_pais TEXT, Paises_Infectados INTEGER
+            )
+        """)
+        
+        # 2. VERIFICAR SI ESTÁ VACÍA Y LLENARLA
+        cursor.execute("SELECT count(*) FROM estado_actual")
+        count = cursor.fetchone()[0]
+        
+        exito = False
+        if count == 0:
+            print("📥 Inicializando DB con datos del CSV...")
+            df = self.cargar_df() # Leemos el CSV
+            if not df.empty:
+                df.to_sql("estado_actual", conn, if_exists="replace", index=False)
+                exito = True
             else:
-                ultimo_dia = 0 
+                print("❌ FATAL: El CSV está vacío o no se pudo leer.")
+        else:
+            exito = False # Ya existía
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return exito
+
+    def guardar_estados(self, datos, pais):
+        try:
+            conn = sql.connect(self.opt.RUTA_DB_CREADA)
             
-            print(datos.loc[datos["I"] > 0]["I"].sum().round())
-            diccionario = {
-            "total_S": datos["S"].sum().round(),
-            "total_R": datos["R"].sum().round(),            
-            "total_I": datos["I"].sum().round(),
-            "total_M": datos["M"].sum().round(),
-            "dia": ultimo_dia + 1,
-            "Primer_pais": pais,
-            "Paises_Infectados": datos.loc[datos["I"] > 0]["I"].count()}
-            df = pd.DataFrame([diccionario])
-            df.to_sql("historial",conn,if_exists="append",index=False)         
-            datos.to_sql("estado_actual",conn,if_exists="replace",index=False)         
-
+            # Historial
+            ultimo_dia = 0
+            try:
+                res = pd.read_sql_query("SELECT dia FROM historial ORDER BY ROWID DESC LIMIT 1", conn)
+                if not res.empty: ultimo_dia = int(res.iloc[0, 0])
+            except: pass
+            
+            dicc = {
+                "total_S": datos["S"].sum(), "total_R": datos["R"].sum(),            
+                "total_I": datos["I"].sum(), "total_M": datos["M"].sum(),
+                "dia": ultimo_dia + 1, "Primer_pais": pais,
+                "Paises_Infectados": (datos["I"] > 0).sum()
+            }
+            pd.DataFrame([dicc]).to_sql("historial", conn, if_exists="append", index=False)         
+            datos.to_sql("estado_actual", conn, if_exists="replace", index=False)         
             conn.close()
-
         except Exception as e:
-            conn.close()
-            print("Ha ocurrido un error mientras se guardaban los estados")
-            raise e
-
+            if conn: conn.close()
+            print(f"Error guardando: {e}")
 
     def limpiar_db(self):
-        if os.path.exists(opt.RUTA_DB_CREADA):
+        if os.path.exists(self.opt.RUTA_DB_CREADA):
             try:
-                os.remove(opt.RUTA_DB_CREADA)
-                return {"mensaje": "Base de datos Borrada exitosamente",
-                        "mensaje":"Simulación reiniciada"},True
-
-            except Exceptiona as e:
-                print("Ha ocurrido un error al eliminar la base de datos")
-                return {"error":e},False
-                
-        else:
-            print("No se encontró la base de datos")
-            return {"mensaje":"No se encontró la base de datos"},False
-                    
+                os.remove(self.opt.RUTA_DB_CREADA)
+                return {"mensaje": "DB Borrada"}, True
+            except: return {"error": "Fallo al borrar"}, False
+        return {"mensaje": "No existía"}, False

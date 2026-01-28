@@ -1,0 +1,22 @@
+[project]
+
+name = "Paper-Pandemic"
+version = "1.0.0"
+description = "Simulador de Pandemia con modelo SIRD realista de todo el mundo"
+dependencies = [
+    "PySide6>=6.7.0", 
+]
+
+[tool.pyside6.project]
+main_file = "main.py"
+# Registra los archivos de la interfaz para que sean compilados o rastreados
+qml_files = [
+    "ui/main.qml",
+    "ui/components/CustomButton.qml",
+    "ui/views/HomeView.qml",
+]
+# Define dónde están los recursos (iconos, imágenes)
+resource_files = ["ui/assets/icons.qrc"]
+
+[tool.setuptools]
+packages = ["backend", "ui"]

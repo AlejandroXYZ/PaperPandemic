@@ -1,0 +1,8 @@
+# Nombre del módulo
+module components.views
+
+# Registro de componentes individuales:
+# [Nombre del Tipo] [Versión] [Nombre del archivo .qml]
+
+Menu 1.0 principal.qml
+
