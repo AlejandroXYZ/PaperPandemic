@@ -8,29 +8,64 @@ Item {
     clip: true
 
     // =========================================================
-    // 1. VARIABLES DEL TOOLTIP MAESTRO (Globales)
+    // 1. TOOLTIP (Variables Globales)
     // =========================================================
-    // Estas variables almacenan la info del país que se está tocando
-    property string tooltipTexto: ""
-    property bool tooltipVisible: false
-    property real tooltipX: 0
-    property real tooltipY: 0
+    property string tooltipHtml: ""
+    property bool isTooltipVisible: false
+    property real tipX: 0
+    property real tipY: 0
 
     // =========================================================
-    // 2. FUNCIONES
+    // 2. LÓGICA DE ZOOM (Doble Clic con Animación)
     // =========================================================
-    function flyToCountry(clickX, clickY) {
-        let targetScale = 5.0;
-        let newX = (mapRoot.width / 2) - 500 - (clickX - 500) * targetScale;
-        let newY = (mapRoot.height / 2) - 400 - (clickY - 400) * targetScale;
-        mapContainer.scale = targetScale;
-        mapContainer.x = newX;
-        mapContainer.y = newY;
+    function flyToCountry(mapX, mapY) {
+        let targetScale = 6.0
+        
+        // Calculamos dónde debe quedar el mapa
+        let newX = (mapRoot.width / 2) - (mapX * targetScale)
+        let newY = (mapRoot.height / 2) - (mapY * targetScale)
+
+        // Preparamos la animación
+        animScale.from = mapContainer.scale
+        animScale.to = targetScale
+        
+        animX.from = mapContainer.x
+        animX.to = newX
+        
+        animY.from = mapContainer.y
+        animY.to = newY
+        
+        // ¡Arrancamos el vuelo suave!
+        zoomAnim.restart()
     }
 
-    function setZoom(factor) {
-        let newScale = mapContainer.scale * factor;
-        mapContainer.scale = Math.max(0.5, Math.min(newScale, 20.0));
+    // Animación SOLO para el doble clic o botones (no afecta la rueda)
+    ParallelAnimation {
+        id: zoomAnim
+        NumberAnimation { id: animX; target: mapContainer; property: "x"; duration: 600; easing.type: Easing.OutCubic }
+        NumberAnimation { id: animY; target: mapContainer; property: "y"; duration: 600; easing.type: Easing.OutCubic }
+        NumberAnimation { id: animScale; target: mapContainer; property: "scale"; duration: 600; easing.type: Easing.OutCubic }
+    }
+
+    // Zoom manual (Botones) - Usa animación
+    function setZoomManual(factor) {
+        let newScale = mapContainer.scale * factor
+        newScale = Math.max(0.5, Math.min(newScale, 30.0))
+        
+        // Hacemos zoom al centro de la pantalla
+        let centerOffsetX = (mapRoot.width / 2 - mapContainer.x) / mapContainer.scale
+        let centerOffsetY = (mapRoot.height / 2 - mapContainer.y) / mapContainer.scale
+        
+        let newX = (mapRoot.width / 2) - (centerOffsetX * newScale)
+        let newY = (mapRoot.height / 2) - (centerOffsetY * newScale)
+
+        animScale.from = mapContainer.scale
+        animScale.to = newScale
+        animX.from = mapContainer.x
+        animX.to = newX
+        animY.from = mapContainer.y
+        animY.to = newY
+        zoomAnim.restart()
     }
 
     // =========================================================
@@ -40,82 +75,102 @@ Item {
         id: mapContainer
         width: 1010
         height: 660
-        anchors.centerIn: parent
-        scale: 0.8
-        transformOrigin: Item.Center
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        scale: 0.9
+        transformOrigin: Item.TopLeft 
 
-        // Gestor de Arrastre (Más rápido que MouseArea para mover)
+        // NOTA: He borrado los "Behavior on x/y/scale". 
+        // Esto hace que el movimiento sea instantáneo y muy rápido.
+
+        // A) Arrastre del fondo
         DragHandler {
-            id: mapDragHandler
             target: mapContainer
             acceptedButtons: Qt.LeftButton
         }
 
-        // Gestor de Zoom con Rueda
+        // B) Zoom con Rueda (INSTANTÁNEO)
         WheelHandler {
-            id: mapWheelHandler
             target: mapContainer
             onWheel: (event) => {
-                mapRoot.setZoom(event.angleDelta.y > 0 ? 1.15 : 0.85);
+                let zoomFactor = event.angleDelta.y > 0 ? 1.15 : 0.85
+                
+                // Calcular posición del mouse relativa al mapa antes del zoom
+                let mouseX_in_map = (event.x - mapContainer.x) / mapContainer.scale
+                let mouseY_in_map = (event.y - mapContainer.y) / mapContainer.scale
+                
+                let newScale = Math.max(0.5, Math.min(mapContainer.scale * zoomFactor, 30.0))
+                
+                // Aplicar cambios directamente (sin animación)
+                mapContainer.x = event.x - (mouseX_in_map * newScale)
+                mapContainer.y = event.y - (mouseY_in_map * newScale)
+                mapContainer.scale = newScale
             }
         }
 
-        // DIBUJADO DE LOS PAÍSES
+        // C) Países
         Repeater {
-            // USAMOS TU NOMBRE ORIGINAL DEL MODELO
-            model: mapa_modelo 
+            model: mapa_modelo
 
             Shape {
                 id: countryShape
-                // Usamos dimensiones fijas para que coincidan con el SVG
                 width: 1010
                 height: 660
-                
-                // Optimizamos la detección del mouse solo a la forma del país
                 containsMode: Shape.FillContains
 
                 ShapePath {
-                    strokeWidth: 1 / mapContainer.scale // Mantiene el borde fino al hacer zoom
-                    strokeColor: "#ffffff"
-                    fillRule: ShapePath.WindingFill
-                    
-                    // Si el color viene vacío, usamos gris por seguridad
+                    strokeWidth: 1.0 / mapContainer.scale 
+                    strokeColor: "white"
                     fillColor: (model.color_pais && model.color_pais !== "") ? model.color_pais : "#CFD8DC"
-                    
-
+                    fillRule: ShapePath.WindingFill
                     PathSvg { path: model.path }
                 }
 
-                // DETECTOR DE MOUSE INDIVIDUAL
                 MouseArea {
+                    id: countryMouse
                     anchors.fill: parent
                     hoverEnabled: true
                     containmentMask: countryShape
-                    cursorShape: Qt.PointingHandCursor
+                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                    
+                    // Permite arrastrar el mapa desde un país
+                    drag.target: mapContainer
+                    drag.filterChildren: true 
 
-                    onDoubleClicked: (mouse) => mapRoot.flyToCountry(mouse.x, mouse.y)
+                    onDoubleClicked: (mouse) => {
+                        let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
+                        mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
+                    }
 
-                    // Cuando el mouse entra, actualizamos las variables globales
+                    // --- TOOLTIP CORREGIDO ---
                     onEntered: {
-                        // Llamamos a la función rápida de Python
-                        mapRoot.tooltipTexto = mapa_modelo.get_datos_pais_html(model.codigo)
-                        mapRoot.tooltipVisible = true
-                        
-                        // Calculamos la posición relativa a la ventana principal
-                        var pos = mapToItem(mapRoot, mouseX, mouseY)
-                        mapRoot.tooltipX = pos.x + 15
-                        mapRoot.tooltipY = pos.y + 15
+                        if (!countryMouse.drag.active) {
+                            try {
+                                mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
+                            } catch(e) { mapRoot.tooltipHtml = "Cargando..." }
+                            
+                            mapRoot.isTooltipVisible = true
+                            // CORRECCIÓN: Usamos mouseX/mouseY directos, no el objeto 'mouse'
+                            updateTooltipPos(mouseX, mouseY)
+                        }
                     }
-
-                    // Si mueves el mouse dentro del país, el tooltip te sigue
+                    
                     onPositionChanged: (mouse) => {
-                        var pos = mapToItem(mapRoot, mouse.x, mouse.y)
-                        mapRoot.tooltipX = pos.x + 15
-                        mapRoot.tooltipY = pos.y + 15
+                        if (countryMouse.drag.active) {
+                            mapRoot.isTooltipVisible = false
+                        } else {
+                            // Aquí 'mouse' sí existe porque viene de la señal
+                            updateTooltipPos(mouse.x, mouse.y)
+                        }
                     }
 
-                    onExited: {
-                        mapRoot.tooltipVisible = false
+                    onExited: mapRoot.isTooltipVisible = false
+                    onCanceled: mapRoot.isTooltipVisible = false // Por si el arrastre cancela el hover
+
+                    function updateTooltipPos(mx, my) {
+                        var pos = mapToItem(mapRoot, mx, my)
+                        mapRoot.tipX = pos.x + 15
+                        mapRoot.tipY = pos.y + 15
                     }
                 }
             }
@@ -123,64 +178,45 @@ Item {
     }
 
     // =========================================================
-    // 4. EL TOOLTIP MAESTRO (ÚNICO)
+    // 4. EL TOOLTIP
     // =========================================================
-    // Está fuera del Repeater, por lo que solo se crea UNA vez.
     Rectangle {
-        id: globalTooltip
-        visible: mapRoot.tooltipVisible
-        x: mapRoot.tooltipX
-        y: mapRoot.tooltipY
-        z: 9999 // Siempre encima de todo
-
-        // El tamaño se adapta al texto
-        width: infoText.contentWidth + 20
-        height: infoText.contentHeight + 14
-        
-        color: "#2f3640" // Fondo oscuro
+        visible: mapRoot.isTooltipVisible
+        x: mapRoot.tipX
+        y: mapRoot.tipY
+        z: 9999
+        width: infoTxt.contentWidth + 24
+        height: infoTxt.contentHeight + 16
+        color: "#2d3436"
         radius: 4
         border.color: "white"
-        border.width: 1
+        opacity: 0.95
 
         Text {
-            id: infoText
+            id: infoTxt
             anchors.centerIn: parent
-            text: mapRoot.tooltipTexto
+            text: mapRoot.tooltipHtml
             color: "white"
             font.pixelSize: 13
-            textFormat: Text.RichText // Permite usar <b> y <br>
+            textFormat: Text.RichText
         }
     }
 
     // =========================================================
-    // 5. BOTONES DE ZOOM
+    // 5. BOTONES
     // =========================================================
     Column {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: 20
         spacing: 10
-
         RoundButton {
-            width: 45; height: 45
-            onClicked: mapRoot.setZoom(1.5)
-            background: Rectangle {
-                color: parent.pressed ? "#636e72" : "#2d3436"
-                radius: width/2
-                border.color: "#b2bec3"
-            }
-            contentItem: Text { text: "+"; color: "white"; font.pixelSize: 24; anchors.centerIn: parent }
+            width: 50; height: 50; text: "+"; font.pixelSize: 24
+            onClicked: mapRoot.setZoomManual(1.5)
         }
-
         RoundButton {
-            width: 45; height: 45
-            onClicked: mapRoot.setZoom(0.7)
-            background: Rectangle {
-                color: parent.pressed ? "#636e72" : "#2d3436"
-                radius: width/2
-                border.color: "#b2bec3"
-            }
-            contentItem: Text { text: "−"; color: "white"; font.pixelSize: 24; anchors.centerIn: parent }
+            width: 50; height: 50; text: "-"; font.pixelSize: 24
+            onClicked: mapRoot.setZoomManual(0.6)
         }
     }
 }
