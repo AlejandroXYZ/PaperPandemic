@@ -147,21 +147,8 @@ class Engine():
                     "M": int(self.dataframe["M"].sum())
                 }
             }
-
-        # =================================================================
-        # 4. EXPANSIÓN (Vecinos y Viajes)
-        # =================================================================
-        if self.primer_pais:
-            idx_zona_cero = self.opt.INDEX_PAIS_A_INFECTAR
-            if idx_zona_cero in self.dataframe.index:
-                if self.dataframe.at[idx_zona_cero, "I"] > self.opt.UMBRAL_INFECCION_EXTERNO:
-                    vecinos = self.indices_vecinos_zona_cero
-                    if len(vecinos) > 0:
-                        dados = np.random.random(len(vecinos))
-                        vecinos_a_infectar = vecinos[dados < self.opt.p_frontera]
-                        self.sir.infectar_multiples(vecinos_a_infectar)
-
-
+            
+        self.sir.procesar_fronteras_inteligente()
         self.sir.actualizar_cooldowns()
                 
         if "vuelo" in self.dataframe.columns:
@@ -268,6 +255,9 @@ class SIR:
             vecinos_indices = []
             for nombre in lista_vecinos_nombres:
                 idx = self.mapa_mundo.get(nombre)
+                if idx is None:
+                    print(f"⚠️ ALERTA: No encuentro el país vecino '{nombre}' en el mapa.")
+                    continue
                 if idx is not None:
                     vecinos_indices.append(idx)
             
@@ -753,6 +743,7 @@ class ControladorSIRD(QObject):
     statsChanged = Signal() 
     diaChanged = Signal(str) 
 
+
     def __init__(self):
         super().__init__()
         
@@ -773,6 +764,7 @@ class ControladorSIRD(QObject):
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick_simulacion)
         self.isPlaying = False
+        self._intervalo_ms = 1000
 
         # 3. ¡IMPORTANTE! Cargar datos iniciales (para no ver ceros)
         # Ejecutamos una actualización manual sin avanzar el tiempo
@@ -803,6 +795,30 @@ class ControladorSIRD(QObject):
 
     @Property(str, notify=noticiaCambio)
     def noticia(self): return self._noticia
+
+
+    @Slot(float)
+    def cambiar_velocidad(self, valor):
+        """
+        Recibe un valor de 0.0 (Lento) a 1.0 (Rápido)
+        Intel Atom Friendly: Mínimo 200ms para dar tiempo a pintar el mapa.
+        """
+        # Mapeo: 
+        # Si valor es 0.0 -> queremos 2000ms (2 segundos, muy lento)
+        # Si valor es 1.0 -> queremos 200ms (0.2 segundos, rápido)
+        
+        ms_min = 200   # Velocidad Máxima (Límite seguro hardware)
+        ms_max = 4000  # Velocidad Mínima
+        
+        # Fórmula de interpolación inversa
+        nuevo_intervalo = int(ms_max - (valor * (ms_max - ms_min)))
+        
+        self._intervalo_ms = nuevo_intervalo
+        
+        # Si ya está corriendo, actualizamos el ritmo "en vivo"
+        if self.isPlaying:
+            self.timer.setInterval(self._intervalo_ms)
+
 
     # --- LÓGICA ---
     @Slot(bool)
@@ -1671,8 +1687,17 @@ Drawer {
             ColumnLayout {
                 width: parent.width; spacing: 20
 
-                // === SOLUCIÓN: Usar backend.config ===
-                // Verifica que backend y config existan antes de pintar
+                SliderControl {
+                    titulo: "⏩ Velocidad Simulación"
+                    // Valor inicial 0.5 (mitad, aprox 1 seg)
+                    valorInicial: 0.5 
+                    maximo: 2.0
+                                    
+                    // Al moverlo, llamamos al nuevo método del backend
+                    onValorCambiado: (val) => { 
+                    if(backend) backend.cambiar_velocidad(val) 
+                    }
+                }
                 
                 SliderControl {
                     titulo: "Tasa de Contagio (β)"

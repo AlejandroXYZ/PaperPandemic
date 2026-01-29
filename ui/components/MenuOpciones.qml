@@ -48,8 +48,17 @@ Drawer {
             ColumnLayout {
                 width: parent.width; spacing: 20
 
-                // === SOLUCIÓN: Usar backend.config ===
-                // Verifica que backend y config existan antes de pintar
+                SliderControl {
+                    titulo: "⏩ Velocidad Simulación"
+                    // Valor inicial 0.5 (mitad, aprox 1 seg)
+                    valorInicial: 0.5 
+                    maximo: 2.0
+                                    
+                    // Al moverlo, llamamos al nuevo método del backend
+                    onValorCambiado: (val) => { 
+                    if(backend) backend.cambiar_velocidad(val) 
+                    }
+                }
                 
                 SliderControl {
                     titulo: "Tasa de Contagio (β)"

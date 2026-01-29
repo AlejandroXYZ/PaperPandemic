@@ -10,6 +10,7 @@ class ControladorSIRD(QObject):
     statsChanged = Signal() 
     diaChanged = Signal(str) 
 
+
     def __init__(self):
         super().__init__()
         
@@ -30,6 +31,7 @@ class ControladorSIRD(QObject):
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick_simulacion)
         self.isPlaying = False
+        self._intervalo_ms = 1000
 
         # 3. ¡IMPORTANTE! Cargar datos iniciales (para no ver ceros)
         # Ejecutamos una actualización manual sin avanzar el tiempo
@@ -61,13 +63,47 @@ class ControladorSIRD(QObject):
     @Property(str, notify=noticiaCambio)
     def noticia(self): return self._noticia
 
+
+    @Slot(float)
+    def cambiar_velocidad(self, valor):
+        """
+        Recibe valor del slider (0.0 a 2.0)
+        Convierte a milisegundos (4000ms a 200ms)
+        """
+        # TUS LÍMITES
+        ms_min = 200     # Lo más rápido (límite del hardware)
+        ms_max = 4000    # Lo más lento
+        slider_max = 2.0 # El valor 'maximo' que pusiste en el QML
+
+        # 1. Normalizamos: Convertimos el 0..2.0 a 0..1.0
+        # Ejemplo: si entra 2.0, factor será 1.0. Si entra 1.0, factor será 0.5
+        factor = valor / slider_max 
+        
+        # 2. Interpolación Lineal Inversa
+        # Intervalo = Inicio + (Fin - Inicio) * factor
+        # Pero como queremos ir de Mayor a Menor, restamos:
+        rango = ms_max - ms_min
+        nuevo_intervalo = int(ms_max - (factor * rango))
+        
+        # 3. Seguridad: Nunca bajar del mínimo del hardware
+        nuevo_intervalo = max(ms_min, nuevo_intervalo)
+        
+        self._intervalo_ms = nuevo_intervalo
+        
+        # Debug para verificar
+        print(f"🏎️ Slider: {valor:.2f} -> Intervalo Real: {self._intervalo_ms} ms")
+
+        # Aplicar inmediatamente si está corriendo
+        if self.isPlaying:
+            self.timer.setInterval(self._intervalo_ms)
+
     # --- LÓGICA ---
     @Slot(bool)
     def toggle_simulacion(self, encendido):
         self.isPlaying = encendido
         if encendido:
             print("▶️ Iniciando Timer...")
-            self.timer.start(1700)
+            self.timer.start(self._intervalo_ms)
         else:
             print("⏸️ Pausando Timer...")
             self.timer.stop()
