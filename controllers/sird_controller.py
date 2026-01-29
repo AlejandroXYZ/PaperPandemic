@@ -20,7 +20,7 @@ class ControladorSIRD(QObject):
         self.motor = Engine(self.opciones) # Pasamos opciones al motor
 
         # 2. Variables de estado
-        self._dia = "Día 1"
+        self._dia = "1"
         self._sanos = 0
         self._infectados = 0
         self._recuperados = 0
@@ -179,7 +179,7 @@ class ControladorSIRD(QObject):
              self._infectados = totales["I"]
              self._recuperados = totales["R"]
              self._muertos = totales["M"]
-             self._dia = "Día 1"
+             self._dia = "1"
              self.statsChanged.emit()
              self.diaChanged.emit(self._dia)
              self.noticiaCambio.emit(self._noticia)
