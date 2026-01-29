@@ -20,6 +20,13 @@ class Options(QObject):
     UMBRAL_INFECCION_EXTERNO = 500
     UMBRAL_ERRADICACION = 10
 
+    # El porcentaje de población infectada necesario para que salgan aviones/barcos (0.4 = 40%)
+    UMBRAL_PCT_TRANSPORTE = 0.40 
+    # Días de espera antes de poder volver a infectar por este medio
+    DIAS_COOLDOWN_TRANSPORTE = 3
+    UMBRAL_PCT_FRONTERA = 0.05   # 20% de infectados para cruzar a pie
+    DIAS_COOLDOWN_FRONTERA = 2   # Espera entre contagios vecinales
+
     # =========================================================
     # 2. SEÑALES
     # =========================================================

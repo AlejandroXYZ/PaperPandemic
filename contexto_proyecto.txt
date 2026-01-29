@@ -1,0 +1,1750 @@
+ESTE ES EL CÓDIGO ACTUAL DEL PROYECTO:
+========================================
+
+--- INICIO DE ARCHIVO: main.py ---
+import sys
+import os
+from pathlib import Path
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
+
+# Asegúrate de que el import sea correcto según tu estructura de carpetas
+from controllers.sird_controller import ControladorSIRD
+
+if __name__ == "__main__":
+    os.environ["QT_QUICK_CONTROLS_STYLE"] = "Material"
+    os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
+    os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "Purple"
+
+    app = QGuiApplication(sys.argv)
+    engine = QQmlApplicationEngine()
+    
+    # Instanciar el Controlador
+    controlador = ControladorSIRD()
+
+    # Exponer a QML
+    engine.rootContext().setContextProperty("backend", controlador)
+    engine.rootContext().setContextProperty("mapa_modelo", controlador.mapa_modelo)
+    
+    # NOTA: Ya no hace falta setContextProperty("opciones"...) 
+    # porque lo hacemos a través de backend.config
+    
+    # Rutas
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    engine.addImportPath(os.path.join(base_dir, "ui"))
+    
+    qml_file = Path(__file__).parent / "ui/main.qml"
+    engine.load(qml_file)
+
+    if not engine.rootObjects():
+        sys.exit(-1)
+
+    sys.exit(app.exec())
+
+--- FIN DE ARCHIVO: main.py ---
+
+--- INICIO DE ARCHIVO: backend/engine.py ---
+from backend.sir_model import SIR
+from backend.loader import Loader
+import numpy as np
+
+class Engine():
+
+    def __init__(self, opciones_instancia):
+        self.opt = opciones_instancia    
+        self.csv = Loader(self.opt)
+        
+        # Intentar crear/conectar DB
+        self.db = self.csv.crear_db()
+        
+        # --- NUEVO: CONTADOR DE DÍAS INTERNO ---
+        self.dia_simulacion = 1 
+        
+        if self.db:            
+            self.primer_pais = None
+            self.dataframe = self.csv.cargar_df()
+        else:
+            self.dataframe = self.csv.cargar_db()
+            self.historial = self.csv.historial()
+            
+            # Si cargamos partida, intentamos recuperar el día donde nos quedamos
+            if not self.historial.empty:
+                try:
+                    self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
+                except:
+                    self.dia_simulacion = 1
+
+            if not self.historial.empty and "Primer_pais" in self.historial.columns:
+                self.primer_pais = self.historial["Primer_pais"].iloc[0]
+            else:
+                self.primer_pais = "Desconocido"
+
+        self.mapa = self.csv.cargar_mapa(self.dataframe)
+        self.sir = SIR(mapa_mundo=self.mapa, df=self.dataframe, opt=self.opt)
+        
+        # Precarga de vecinos del paciente cero (Optimización)
+        if self.primer_pais and self.primer_pais != "Desconocido":
+            vecinos = self.sir.buscar_vecinos(self.primer_pais)
+            self.indices_vecinos_zona_cero = np.array(vecinos) if vecinos else np.array([])
+        else:
+            self.indices_vecinos_zona_cero = np.array([])
+    
+    def avanzar_dia(self):
+        # 1. AUMENTAR DÍA
+        self.dia_simulacion += 1
+        
+        # Calculamos totales actuales para tomar decisiones
+        infectados_totales = self.dataframe["I"].sum()
+        sanos_totales = self.dataframe["S"].sum()
+        historia_pandemia = self.dataframe["R"].sum() + self.dataframe["M"].sum()
+        poblacion_total = sanos_totales + infectados_totales + historia_pandemia
+
+        # =================================================================
+        # 2. LÓGICA DE INICIO (Paciente Cero)
+        # =================================================================
+        # Si no hay infectados Y NADIE ha muerto ni se ha recuperado (Inicio virgen)
+        if infectados_totales == 0 and historia_pandemia == 0:
+            print("☣️ Paciente Cero detectado.")
+            self.sir.infectar_primera_vez()
+            
+            pais_idx = self.opt.INDEX_PAIS_A_INFECTAR
+            if pais_idx in self.dataframe.index:
+                self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
+            else:
+                self.primer_pais = "Desconocido"
+            
+            # Reiniciar día si empezamos de cero
+            self.dia_simulacion = 1
+            self.db = False 
+            
+            # Recalculamos para que el status no dé "Humanos Ganan" en este mismo tick
+            infectados_totales = self.dataframe["I"].sum()
+
+        # =================================================================
+        # 3. VERIFICAR ESTADO DEL JUEGO
+        # =================================================================
+        status = "Jugando"
+
+        if poblacion_total == 0:
+            status = "Cargando..."
+        elif sanos_totales <= 0:
+            status = "Virus Gana"
+        elif infectados_totales <= 0 and historia_pandemia > 0:
+            # Solo ganan los humanos si hubo virus alguna vez y se extinguió
+            status = "Humanos Ganan"
+
+        # Si el juego terminó, devolvemos resultado final inmediatamente
+        if status != "Jugando":
+            return {
+                "status": status,
+                "dia": str(self.dia_simulacion),
+                "datos": self.dataframe.to_dict(orient="records"),
+                "totales": {
+                    "S": int(self.dataframe["S"].sum()),
+                    "I": int(self.dataframe["I"].sum()),
+                    "R": int(self.dataframe["R"].sum()),
+                    "M": int(self.dataframe["M"].sum())
+                }
+            }
+
+        # =================================================================
+        # 4. EXPANSIÓN (Vecinos y Viajes)
+        # =================================================================
+        if self.primer_pais:
+            idx_zona_cero = self.opt.INDEX_PAIS_A_INFECTAR
+            if idx_zona_cero in self.dataframe.index:
+                if self.dataframe.at[idx_zona_cero, "I"] > self.opt.UMBRAL_INFECCION_EXTERNO:
+                    vecinos = self.indices_vecinos_zona_cero
+                    if len(vecinos) > 0:
+                        dados = np.random.random(len(vecinos))
+                        vecinos_a_infectar = vecinos[dados < self.opt.p_frontera]
+                        self.sir.infectar_multiples(vecinos_a_infectar)
+
+
+        self.sir.actualizar_cooldowns()
+                
+        if "vuelo" in self.dataframe.columns:
+            self.sir.procesar_logistica(tipo_transporte="vuelo")
+        
+        if "puerto" in self.dataframe.columns:
+            self.sir.procesar_logistica(tipo_transporte="puerto")
+
+
+        # =================================================================
+        # 5. MATEMÁTICAS SIRD (Pasando el día actual para la regla del día 15)
+        # =================================================================
+        resultado = self.sir.ejecutar(dia_actual=self.dia_simulacion)
+        
+        try:
+            self.csv.guardar_estados(resultado, self.primer_pais)
+        except:
+            pass 
+
+        return {
+            "status": "PLAYING",
+            "dia": str(self.dia_simulacion),
+            "totales": {
+                "S": int(resultado["S"].sum()),
+                "I": int(resultado["I"].sum()),
+                "R": int(resultado["R"].sum()),
+                "M": int(resultado["M"].sum())
+            },
+            "datos": resultado.to_dict(orient="records")
+        }
+
+--- FIN DE ARCHIVO: backend/engine.py ---
+
+--- INICIO DE ARCHIVO: backend/sir_model.py ---
+import pandas as pd
+import numpy as np
+
+class SIR:
+    def __init__(self, mapa_mundo, df, opt):
+        self.mapa_mundo = mapa_mundo
+        self.df = df
+        self.opt = opt 
+        self._inicializar_cache()
+
+    def _inicializar_cache(self):
+        filtro = "accesible|océano|mar|rutas internacionales"
+        self._mascara_vuelos = self.df["vuelo"].astype(str).str.lower().str.contains(filtro)
+        self._mascara_puertos = self.df["puerto"].astype(str).str.lower().str.contains(filtro)
+
+    def infectar_primera_vez(self):
+        infectados_iniciales = self.opt.INFECTADOS_INICIALES
+        paciente_cero_index = self.opt.INDEX_PAIS_A_INFECTAR
+        
+        poblacion_pais = self.df.loc[paciente_cero_index, "poblacion"]
+        infectados_reales = min(infectados_iniciales, poblacion_pais)
+        
+        self.df.loc[paciente_cero_index,"S"] -= infectados_reales
+        self.df.loc[paciente_cero_index,"I"] += infectados_reales
+
+    def actualizar_cooldowns(self):
+        """Resta 1 día al contador de espera de todos los países"""
+        # Usamos vectorización para restar 1, pero sin bajar de 0
+        self.df["cooldown_vuelo"] = np.maximum(0, self.df["cooldown_vuelo"] - 1)
+        self.df["cooldown_puerto"] = np.maximum(0, self.df["cooldown_puerto"] - 1)
+        self.df["cooldown_frontera"] = np.maximum(0, self.df["cooldown_frontera"] - 1)
+
+        
+    def procesar_fronteras_inteligente(self):
+        """
+        Lógica de contagio vecinal:
+        1. Emisor > 20% Infectados.
+        2. Cooldown Frontera == 0.
+        3. Elige 1 vecino aleatorio disponible.
+        """
+        # 1. Filtramos países peligrosos (Emisores)
+        poblacion_minima = 1
+        pct_infectados = self.df["I"] / np.maximum(self.df["poblacion"], poblacion_minima)
+
+        condicion_infeccion = (pct_infectados >= self.opt.UMBRAL_PCT_FRONTERA) | \
+                              (self.df["I"] > self.opt.UMBRAL_INFECCION_EXTERNO)
+        
+        mask_emisores = (
+            (pct_infectados >= self.opt.UMBRAL_PCT_FRONTERA) &
+            (self.df["cooldown_frontera"] == 0) &
+            (self.df["vecinos"] != "No") # Que tenga vecinos
+        )
+        
+        indices_emisores = self.df[mask_emisores].index.tolist()
+        
+        if not indices_emisores: return # Nadie puede infectar hoy
+
+        infectados_nuevos = []
+
+        # 2. Iteramos solo sobre los países peligrosos
+        for emisor_idx in indices_emisores:
+            # Obtenemos la cadena de vecinos "China, Russia, Mongolia"
+            vecinos_str = self.df.at[emisor_idx, "vecinos"]
+            if not vecinos_str or vecinos_str == "No": continue
+
+            lista_vecinos_nombres = [v.strip() for v in vecinos_str.split(",")]
+            
+            # Convertimos nombres a índices numéricos usando self.mapa_mundo
+            # (Optimizacion: self.mapa_mundo es un dict {"Nombre": Indice})
+            vecinos_indices = []
+            for nombre in lista_vecinos_nombres:
+                idx = self.mapa_mundo.get(nombre)
+                if idx is not None:
+                    vecinos_indices.append(idx)
+            
+            if not vecinos_indices: continue
+
+            # 3. Filtramos: Solo vecinos que estén SANOS (o con poca infección si quisieras)
+            # Para este juego, asumiremos que atacamos a cualquiera, 
+            # pero solo 'cuenta' si tiene sanos disponibles.
+            vecinos_validos = [idx for idx in vecinos_indices if self.df.at[idx, "S"] > 0]
+            
+            if vecinos_validos:
+                # 4. DADO: Elegir UNO al azar
+                victima_idx = np.random.choice(vecinos_validos)
+                
+                # Infectamos a la víctima
+                infectados_nuevos.append(victima_idx)
+                
+                # CASTIGO: Cooldown al emisor
+                self.df.at[emisor_idx, "cooldown_frontera"] = self.opt.DIAS_COOLDOWN_FRONTERA
+                
+                # Debug (Opcional)
+                # print(f"🚶 Frontera: {self.df.at[emisor_idx, 'Country Name']} -> {self.df.at[victima_idx, 'Country Name']}")
+
+        # Aplicar infecciones en lote
+        if infectados_nuevos:
+            self.infectar_multiples(np.array(infectados_nuevos))
+
+    def procesar_logistica(self, tipo_transporte="vuelo"):
+        """
+        Lógica avanzada:
+        1. Emisor debe tener > 40% infectados.
+        2. Emisor debe tener cooldown == 0.
+        3. Elige 1 víctima al azar.
+        4. Aplica cooldown al emisor.
+        """
+        # Seleccionar columna y cooldown correcto
+        col_cooldown = "cooldown_vuelo" if tipo_transporte == "vuelo" else "cooldown_puerto"
+        mascara_conexion = self._mascara_vuelos if tipo_transporte == "vuelo" else self._mascara_puertos
+        
+        # 1. IDENTIFICAR EMISORES (Países peligrosos)
+        # Regla: Tienen conexión + Infectados > 40% + Cooldown en 0
+        poblacion_minima = 1 # Evitar div por cero
+        pct_infectados = self.df["I"] / np.maximum(self.df["poblacion"], poblacion_minima)
+        
+        # Filtro booleano vectorizado (Muy rápido)
+        emisores_validos = (
+            mascara_conexion & 
+            (pct_infectados >= self.opt.UMBRAL_PCT_TRANSPORTE) & 
+            (self.df[col_cooldown] == 0) &
+            (self.df["I"] > 0)
+        )
+        
+        indices_emisores = self.df[emisores_validos].index.tolist()
+        
+        if not indices_emisores:
+            return # Nadie cumple los requisitos para atacar hoy
+
+        # 2. IDENTIFICAR VÍCTIMAS POTENCIALES (Cualquiera con conexión y Sano)
+        # Asumimos "Global Connection": Si tienes aeropuerto, puedes ir a cualquier aeropuerto
+        victimas_validas = (
+            mascara_conexion & 
+            (self.df["I"] == 0) & 
+            (self.df["S"] > 0)
+        )
+        indices_victimas = self.df[victimas_validas].index.tolist()
+
+        if not indices_victimas:
+            return # Ya no queda nadie sano con aeropuerto/puerto
+
+        # 3. LANZAR LOS DADOS (Iteración optimizada)
+        # Solo iteramos sobre los emisores, que serán pocos al inicio.
+        nuevos_infectados = []
+        
+        # Barajamos víctimas para evitar sesgos
+        np.random.shuffle(indices_victimas)
+        
+        for emisor_idx in indices_emisores:
+            if not indices_victimas: break # Se acabaron las víctimas
+            
+            # Probabilidad de éxito del viaje (Opcional: añadir factor de riesgo)
+            if np.random.random() < self.opt.PROBABILIDAD_INFECTAR_VUELO:
+                # Tomamos una víctima y la sacamos de la lista (para que no la infecten 2 veces hoy)
+                victima = indices_victimas.pop() 
+                nuevos_infectados.append(victima)
+                
+                # CASTIGO AL EMISOR: Cooldown de 3 días
+                self.df.at[emisor_idx, col_cooldown] = self.opt.DIAS_COOLDOWN_TRANSPORTE
+                
+                # Debug en consola (útil para verificar que funciona)
+                nombre_emisor = self.df.at[emisor_idx, "Country Name"]
+                nombre_victima = self.df.at[victima, "Country Name"]
+
+        # 4. APLICAR INFECCIÓN
+        if nuevos_infectados:
+            self.infectar_multiples(np.array(nuevos_infectados))
+
+    def infectar_multiples(self, indices):
+        if len(indices) == 0: return
+        sanos_disponibles = self.df.loc[indices, "S"]
+        infectados_reales = np.minimum(self.opt.INFECTADOS_INICIALES_VECINOS, sanos_disponibles)
+        self.df.loc[indices, "S"] -= infectados_reales
+        self.df.loc[indices, "I"] += infectados_reales
+
+    def buscar_vecinos(self, pais_infectado): 
+        lista_paises = self.df[self.df["Country Name"] == pais_infectado]
+        if lista_paises.empty: return None
+        vecinos = list(lista_paises["vecinos"])
+        if not vecinos: return None
+        paises = vecinos[0].split(",")
+        indexses = []
+        for i in paises:
+            index = self.mapa_mundo.get(i.strip())
+            if index is not None: indexses.append(index)
+        if not indexses: return None
+        else:
+            infectados = self.df.loc[indexses]
+            return infectados[infectados["I"] == 0].index.tolist()
+
+    def buscar_vuelos_y_puertos(self, tipo):
+        tiene_conexion = self._mascara_vuelos if tipo == "vuelo" else self._mascara_puertos
+        emisores = tiene_conexion & (self.df["I"] > self.opt.UMBRAL_INFECCION_EXTERNO)
+        if emisores.sum() == 0: return [], 0
+        victimas = tiene_conexion & (self.df["I"] == 0) & (self.df["S"] > 0)
+        return self.df[victimas].index.tolist(), emisores.sum()
+
+    # =========================================================
+    # FUNCIÓN EJECUTAR MODIFICADA
+    # =========================================================
+    def ejecutar(self, dia_actual):
+        # 1. Cargar tasas base
+        self.df["beta"] = self.opt.beta
+        
+        if dia_actual <= 4:
+            self.df["gamma"] = 0.0
+            self.df["mu"] = 0.0
+        else:
+            # A partir del día 16, usamos los valores de los sliders
+            self.df["gamma"] = self.opt.gamma
+            self.df["mu"] = self.opt.mu
+
+        # ----------------------------------------------------
+
+        # Cálculos SIRD (Vectorizado)
+        sano_a_infectado = self.df["beta"] * self.df["S"] * self.df["I"] / (self.df["poblacion"] + 1)
+        sano_a_infectado = sano_a_infectado.clip(upper=self.df["S"])
+
+        infectado_a_recuperado = self.df["I"] * self.df["gamma"]
+        infectado_a_muerto = self.df["I"] * self.df["mu"]
+
+        total_salidas = infectado_a_recuperado + infectado_a_muerto
+        factor = np.ones_like(self.df["I"])
+        mask_exceso = total_salidas > self.df["I"]
+        if mask_exceso.any():
+            factor[mask_exceso] = self.df.loc[mask_exceso, "I"] / (total_salidas[mask_exceso] + 1e-9)
+
+        infectado_a_recuperado *= factor
+        infectado_a_muerto *= factor
+        
+        self.df["S"] -= sano_a_infectado
+        self.df["I"] += (sano_a_infectado - infectado_a_recuperado - infectado_a_muerto)
+        self.df["R"] += infectado_a_recuperado
+        self.df["M"] += infectado_a_muerto
+
+        # =============================================================
+        # LIMPIEZA AUTOMÁTICA (Solo aplica DESPUÉS del día 15)
+        # =============================================================
+        if dia_actual > 15:
+            tasa_salida_total = self.df["gamma"] + self.df["mu"]
+            
+            # Solo limpiamos si hay MENOS de 1 infectado (residuos decimales 0.005, etc)
+            # Antes usabas UMBRAL_ERRADICACION (10), pero es mejor usar < 1.0 para ser precisos.
+            erradicacion = (self.df["I"] > 0) & \
+                           (self.df["I"] < self.opt.UMBRAL_ERRADICACION) & \
+                           (tasa_salida_total > 0)
+
+            if erradicacion.any():
+                infectados_restantes = self.df.loc[erradicacion, "I"].copy()
+                
+                gamma_vec = self.df.loc[erradicacion, "gamma"]
+                total_vec = tasa_salida_total[erradicacion]
+                
+                # Evitar división por cero
+                prop_recuperacion = np.zeros_like(gamma_vec)
+                mask_total_pos = total_vec > 0
+                prop_recuperacion[mask_total_pos] = gamma_vec[mask_total_pos] / total_vec[mask_total_pos]
+                
+                recuperados_finales = (infectados_restantes * prop_recuperacion).round(0)
+                muertes_finales = infectados_restantes - recuperados_finales
+
+                self.df.loc[erradicacion, "M"] += muertes_finales
+                self.df.loc[erradicacion, "R"] += recuperados_finales
+                self.df.loc[erradicacion, "I"] = 0
+
+        # Redondeo seguro para visualización
+        cols_a_redondear = ["S", "I", "R", "M"]
+        self.df[cols_a_redondear] = self.df[cols_a_redondear].clip(lower=0)        
+        
+        return self.df
+
+--- FIN DE ARCHIVO: backend/sir_model.py ---
+
+--- INICIO DE ARCHIVO: backend/loader.py ---
+import pandas as pd
+import sqlite3 as sql
+import os
+
+class Loader:
+    def __init__(self, opt_instance):
+        self.opt = opt_instance
+
+    def _reparar_columnas(self, df):
+        """Asegura que existan las columnas críticas"""
+        columnas_texto = ["vuelo", "puerto", "vecinos", "Country Code", "Country Name"]
+        for col in columnas_texto:
+            if col not in df.columns:
+                df[col] = "No"
+
+        if "cooldown_vuelo" not in df.columns:
+            df["cooldown_vuelo"] = 0
+        if "cooldown_puerto" not in df.columns:
+            df["cooldown_puerto"] = 0
+        if "cooldown_frontera" not in df.columns:
+            df["cooldown_frontera"] = 0
+        return df
+
+    def cargar_mapa(self, df):
+        if "Country Name" not in df.columns: return {}
+        return dict(zip(df["Country Name"], df.index))
+    
+    def cargar_df(self):
+        # Intentar cargar CSV
+        if not os.path.exists(self.opt.RUTA_CSV):
+            print(f"❌ ERROR: No existe {self.opt.RUTA_CSV}")
+            return pd.DataFrame(columns=["Country Name", "poblacion", "vuelo", "puerto", "vecinos", "S", "I", "R", "M", "beta", "gamma", "mu"])
+
+        try:
+            df = pd.read_csv(self.opt.RUTA_CSV)
+        except Exception as e:
+            print(f"❌ ERROR leyendo CSV: {e}")
+            return pd.DataFrame()
+        
+        # Limpieza y Tipos
+        if "poblacion" in df.columns:
+            if df["poblacion"].dtype == 'object':
+                df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
+            df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce').fillna(0).astype(int)
+            df = df[df["poblacion"] > 0] # Eliminar países sin gente
+        
+        if "Country Name" in df.columns:
+            df = df.dropna(subset=["Country Name"])
+
+        df = self._reparar_columnas(df)
+
+        # Inicialización de Modelo
+        df["S"] = df["poblacion"]
+        df["I"] = 0
+        df["R"] = 0
+        df["M"] = 0
+        
+        # Parámetros iniciales
+        df["beta"] = self.opt.beta
+        df["gamma"] = self.opt.gamma
+        df["mu"] = self.opt.mu
+        
+        # Conversión a string segura
+        df["vuelo"] = df["vuelo"].astype(str)
+        df["puerto"] = df["puerto"].astype(str)
+        
+        return df
+
+    def cargar_db(self):
+        try:
+            conn = sql.connect(self.opt.RUTA_DB_CREADA)
+            df = pd.read_sql("SELECT * FROM estado_actual", conn)
+            conn.close()
+            
+            if df.empty: raise Exception("DB Vacía")
+            
+            df = self._reparar_columnas(df)
+            # Actualizar tasas con los sliders actuales
+            df["beta"] = self.opt.beta
+            df["gamma"] = self.opt.gamma
+            df["mu"] = self.opt.mu
+            return df
+        except:
+            print("⚠️ DB vacía o corrupta. Recargando desde CSV...")
+            return self.cargar_df() # Fallback al CSV
+
+    def historial(self):
+        try:
+            conn = sql.connect(self.opt.RUTA_DB_CREADA)
+            df = pd.read_sql("SELECT * FROM historial", conn)
+            conn.close()
+            return df
+        except:
+            return pd.DataFrame()
+        
+    def crear_db(self):
+        """Crea la DB y LA RELLENA INMEDIATAMENTE con el CSV"""
+        os.makedirs(os.path.dirname(self.opt.RUTA_DB_CREADA), exist_ok=True)
+
+        conn = sql.connect(self.opt.RUTA_DB_CREADA)
+        cursor = conn.cursor()
+        
+        # 1. Crear Tablas
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS estado_actual (
+                'Country Name' TEXT, 'Country Code' TEXT, 'poblacion' INTEGER,
+                'vuelo' TEXT, 'puerto' TEXT, 'vecinos' TEXT,
+                'S' INTEGER, 'I' INTEGER, 'R' INTEGER, 'M' INTEGER,
+                'beta' REAL, 'gamma' REAL, 'mu' REAL
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historial( 
+                dia TEXT, total_I INTEGER, total_S INTEGER, 
+                total_R INTEGER, total_M INTEGER, 
+                Primer_pais TEXT, Paises_Infectados INTEGER
+            )
+        """)
+        
+        # 2. VERIFICAR SI ESTÁ VACÍA Y LLENARLA
+        cursor.execute("SELECT count(*) FROM estado_actual")
+        count = cursor.fetchone()[0]
+        
+        exito = False
+        if count == 0:
+            print("📥 Inicializando DB con datos del CSV...")
+            df = self.cargar_df() # Leemos el CSV
+            if not df.empty:
+                df.to_sql("estado_actual", conn, if_exists="replace", index=False)
+                exito = True
+            else:
+                print("❌ FATAL: El CSV está vacío o no se pudo leer.")
+        else:
+            exito = False # Ya existía
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return exito
+
+    def guardar_estados(self, datos, pais):
+        try:
+            conn = sql.connect(self.opt.RUTA_DB_CREADA)
+            
+            # Historial
+            ultimo_dia = 0
+            try:
+                res = pd.read_sql_query("SELECT dia FROM historial ORDER BY ROWID DESC LIMIT 1", conn)
+                if not res.empty: ultimo_dia = int(res.iloc[0, 0])
+            except: pass
+            
+            dicc = {
+                "total_S": datos["S"].sum(), "total_R": datos["R"].sum(),            
+                "total_I": datos["I"].sum(), "total_M": datos["M"].sum(),
+                "dia": ultimo_dia + 1, "Primer_pais": pais,
+                "Paises_Infectados": (datos["I"] > 0).sum()
+            }
+            pd.DataFrame([dicc]).to_sql("historial", conn, if_exists="append", index=False)         
+            datos.to_sql("estado_actual", conn, if_exists="replace", index=False)         
+            conn.close()
+        except Exception as e:
+            if conn: conn.close()
+            print(f"Error guardando: {e}")
+
+    def limpiar_db(self):
+        if os.path.exists(self.opt.RUTA_DB_CREADA):
+            try:
+                os.remove(self.opt.RUTA_DB_CREADA)
+                return {"mensaje": "DB Borrada"}, True
+            except: return {"error": "Fallo al borrar"}, False
+        return {"mensaje": "No existía"}, False
+
+--- FIN DE ARCHIVO: backend/loader.py ---
+
+--- INICIO DE ARCHIVO: backend/options.py ---
+from PySide6.QtCore import QObject, Signal, Property
+import os
+
+class Options(QObject):
+    # =========================================================
+    # 1. CONSTANTES DE RUTA (Arreglado para carpeta 'backend')
+    # =========================================================
+    
+    # Obtenemos la ruta absoluta de la carpeta donde está ESTE archivo (backend/)
+    _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+    
+    # Construimos las rutas apuntando a la carpeta 'data' dentro de 'backend'
+    RUTA_DB_CREADA = os.path.join(_BACKEND_DIR, "data", "mundo.db")
+    RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
+
+    # Constantes fijas del juego
+    INDEX_PAIS_A_INFECTAR = 88
+    INFECTADOS_INICIALES = 2
+    INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
+    UMBRAL_INFECCION_EXTERNO = 500
+    UMBRAL_ERRADICACION = 10
+
+    # El porcentaje de población infectada necesario para que salgan aviones/barcos (0.4 = 40%)
+    UMBRAL_PCT_TRANSPORTE = 0.40 
+    # Días de espera antes de poder volver a infectar por este medio
+    DIAS_COOLDOWN_TRANSPORTE = 3
+    UMBRAL_PCT_FRONTERA = 0.05   # 20% de infectados para cruzar a pie
+    DIAS_COOLDOWN_FRONTERA = 2   # Espera entre contagios vecinales
+
+    # =========================================================
+    # 2. SEÑALES
+    # =========================================================
+    betaChanged = Signal(float)
+    gammaChanged = Signal(float)
+    muChanged = Signal(float)
+    pFronteraChanged = Signal(float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Debug: Imprimimos la ruta para que verifiques en consola
+        print(f"📁 BUSCANDO DATOS EN: {self.RUTA_CSV}")
+
+        # =====================================================
+        # 3. VARIABLES DINÁMICAS
+        # =====================================================
+        self._beta = 0.5
+        self._gamma = 0.02
+        self._mu = 0.005
+        self._p_frontera = 1.0
+        
+        # Probabilidades extra
+        self.PROBABILIDAD_INFECTAR_VUELO = 1.0
+        self.PROBABILIDAD_INFECTAR_PUERTO = 1.0
+
+    # --- GETTERS Y SETTERS ---
+    @Property(float, notify=betaChanged)
+    def beta(self): return self._beta
+
+    @beta.setter
+    def beta(self, val):
+        if self._beta != val:
+            self._beta = val
+            self.betaChanged.emit(val)
+
+    @Property(float, notify=gammaChanged)
+    def gamma(self): return self._gamma
+
+    @gamma.setter
+    def gamma(self, val):
+        if self._gamma != val:
+            self._gamma = val
+            self.gammaChanged.emit(val)
+
+    @Property(float, notify=muChanged)
+    def mu(self): return self._mu
+
+    @mu.setter
+    def mu(self, val):
+        if self._mu != val:
+            self._mu = val
+            self.muChanged.emit(val)
+
+    @Property(float, notify=pFronteraChanged)
+    def p_frontera(self): return self._p_frontera
+
+    @p_frontera.setter
+    def p_frontera(self, val):
+        if self._p_frontera != val:
+            self._p_frontera = val
+            self.pFronteraChanged.emit(val)
+
+--- FIN DE ARCHIVO: backend/options.py ---
+
+--- INICIO DE ARCHIVO: controllers/sird_controller.py ---
+from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer
+from backend.engine import Engine
+from controllers.mapa_modelo import MapaModeloSIRD
+from backend.options import Options
+
+class ControladorSIRD(QObject):
+    # Señales
+    datosCambios = Signal()
+    noticiaCambio = Signal(str)
+    statsChanged = Signal() 
+    diaChanged = Signal(str) 
+
+    def __init__(self):
+        super().__init__()
+        
+        # 1. Inicializar objetos
+        self.opciones = Options()
+        self.mapa_modelo = MapaModeloSIRD()
+        self.motor = Engine(self.opciones) # Pasamos opciones al motor
+
+        # 2. Variables de estado
+        self._dia = "Día 1"
+        self._sanos = 0
+        self._infectados = 0
+        self._recuperados = 0
+        self._muertos = 0
+        self._paisesInfectados = 0
+        self._noticia = "Preparado. Pulsa Play."
+        
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.tick_simulacion)
+        self.isPlaying = False
+
+        # 3. ¡IMPORTANTE! Cargar datos iniciales (para no ver ceros)
+        # Ejecutamos una actualización manual sin avanzar el tiempo
+        self.actualizar_interfaz_desde_motor()
+
+    @Property(QObject, constant=True)
+    def config(self):
+        return self.opciones
+
+    @Property(float, notify=statsChanged)
+    def sanos(self): return float(self._sanos)
+
+    @Property(float, notify=statsChanged)
+    def infectados(self): return float(self._infectados)
+
+    @Property(float, notify=statsChanged)
+    def recuperados(self): return float(self._recuperados)
+
+    @Property(float, notify=statsChanged)
+    def muertos(self): return float(self._muertos)
+    
+    # Este puede quedarse en int porque nunca habrá más de 200 países
+    @Property(int, notify=statsChanged)
+    def paisesInfectados(self): return self._paisesInfectados
+
+    @Property(str, notify=diaChanged)
+    def dia(self): return str(self._dia)
+
+    @Property(str, notify=noticiaCambio)
+    def noticia(self): return self._noticia
+
+    # --- LÓGICA ---
+    @Slot(bool)
+    def toggle_simulacion(self, encendido):
+        self.isPlaying = encendido
+        if encendido:
+            print("▶️ Iniciando Timer...")
+            self.timer.start(1700)
+        else:
+            print("⏸️ Pausando Timer...")
+            self.timer.stop()
+
+    @Slot()
+    def pausar_simulacion(self):
+        self.toggle_simulacion(False)
+
+    @Slot()
+    def reiniciar_simulacion(self):
+        self.reiniciar()
+
+    @Slot()
+    def reiniciar(self):
+        print("⟲ Reiniciando...")
+        self.timer.stop()
+        self.isPlaying = False
+
+        # Limpiar
+        if hasattr(self, 'motor'):
+            try: self.motor.csv.limpiar_db()
+            except: pass
+
+        self.mapa_modelo._inicializar_vacio()
+        self.motor = Engine(self.opciones) # Motor nuevo con opciones
+
+        self._noticia = "Simulación Reiniciada."
+        
+        # Cargar estado inicial limpio
+        self.actualizar_interfaz_desde_motor()
+
+    def tick_simulacion(self):
+        if not self.isPlaying: return
+        
+        # Avanzar lógica
+        resultado = self.motor.avanzar_dia()
+        self.procesar_resultado(resultado)
+
+    def actualizar_interfaz_desde_motor(self):
+        """Lee el estado actual del motor SIN avanzar el día"""
+        # Forzamos una lectura del estado actual del dataframe
+        if hasattr(self.motor, 'dataframe'):
+             # Construimos un 'resultado' falso solo para actualizar la UI
+             df = self.motor.dataframe
+             totales = {
+                 "S": int(df["S"].sum()),
+                 "I": int(df["I"].sum()),
+                 "R": int(df["R"].sum()),
+                 "M": int(df["M"].sum())
+             }
+             # Actualizamos variables
+             self._sanos = totales["S"]
+             self._infectados = totales["I"]
+             self._recuperados = totales["R"]
+             self._muertos = totales["M"]
+             self._dia = "Día 1"
+             self.statsChanged.emit()
+             self.diaChanged.emit(self._dia)
+             self.noticiaCambio.emit(self._noticia)
+             
+             # Actualizar colores iniciales
+             self.mapa_modelo.actualizar_datos(df.to_dict(orient="records"))
+
+    def procesar_resultado(self, resultado):
+        status = resultado.get("status", "Jugando")
+        
+        datos = resultado.get("datos", [])
+        if datos: self.mapa_modelo.actualizar_datos(datos)
+
+        totales = resultado.get("totales", {})
+        if totales:
+            self._sanos = int(totales.get("S", 0))
+            self._infectados = int(totales.get("I", 0))
+            self._recuperados = int(totales.get("R", 0))
+            self._muertos = int(totales.get("M", 0))
+
+        self._dia = str(resultado.get("dia", self._dia))
+        self._paisesInfectados = sum(1 for p in datos if p.get("I", 0) > 0)
+
+        self.statsChanged.emit()
+        self.diaChanged.emit(self._dia)
+
+        if status != "PLAYING" and status != "Jugando":
+            self.pausar_simulacion()
+            self._noticia = f"🏁 FIN: {status}"
+            self.noticiaCambio.emit(self._noticia)
+
+--- FIN DE ARCHIVO: controllers/sird_controller.py ---
+
+--- INICIO DE ARCHIVO: controllers/mapa_modelo.py ---
+from PySide6.QtCore import QAbstractListModel, Qt, Slot
+import json
+import os
+
+class MapaModeloSIRD(QAbstractListModel):
+    CodigoRole = Qt.UserRole + 1
+    NombreRole = Qt.UserRole + 2
+    PathRole = Qt.UserRole + 3
+    InfectadoRole = Qt.UserRole + 4
+    RecuperadoRole = Qt.UserRole + 5
+    ColorRole = Qt.UserRole + 6 
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.paises = []
+        
+        # Cargar geometría del mapa
+        try:
+            BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            json_path = os.path.join(BASE_DIR, "ui", "assets", "paises.json")
+            with open(json_path, encoding='utf-8') as f:
+                self.geometria = json.load(f)
+        except Exception as e:
+            print(f"❌ Error cargando paises.json: {e}")
+            self.geometria = {}
+
+        self._inicializar_vacio()
+
+    def _inicializar_vacio(self):
+        """Estado inicial: Todo azul tranquilo"""
+        self.beginResetModel()
+        self.paises = []
+        # Color base solicitado: #A2B2F3 (Azul claro)
+        for codigo, path in self.geometria.items():
+            self.paises.append({
+                "codigo": codigo,
+                "nombre": codigo, 
+                "path": path,
+                "infectado": 0,
+                "recuperado": 0,
+                "poblacion": 1, 
+                "color": "#A2B2F3"
+            })
+        self.endResetModel()
+
+    def roleNames(self):
+        return {
+            self.CodigoRole: b"codigo",
+            self.NombreRole: b"nombre",
+            self.PathRole: b"path",
+            self.InfectadoRole: b"infectado",
+            self.RecuperadoRole: b"recuperado",
+            self.ColorRole: b"color_pais" 
+        }
+
+    def rowCount(self, parent=None):
+        return len(self.paises)
+
+    def data(self, index, role):
+        if not index.isValid(): return None
+        if index.row() >= len(self.paises): return None
+        
+        pais = self.paises[index.row()]
+        
+        if role == self.CodigoRole: return pais["codigo"]
+        if role == self.NombreRole: return pais["nombre"]
+        if role == self.PathRole: return pais["path"]
+        if role == self.InfectadoRole: return pais["infectado"]
+        if role == self.RecuperadoRole: return pais["recuperado"]
+        if role == self.ColorRole: return pais["color"]
+        return None
+
+    @Slot(str, result=str)
+    def get_datos_pais_html(self, codigo_pais):
+        for pais in self.paises:
+            if pais["codigo"] == codigo_pais:
+                pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
+                pct = (pais['infectado'] / pob) * 100
+                
+                return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
+                        f"👥 Población: {pob:,}<br>"
+                        f"🤒 Infectados: {pais['infectado']:,} ({pct:.2f}%)<br>"
+                        f"💚 Recuperados: {pais['recuperado']:,}")
+        return "Sin datos"
+
+    # =========================================================
+    # MOTOR DE COLORES
+    # =========================================================
+    def calcular_color_hex(self, porcentaje):
+        # porcentaje de 0.0 a 1.0
+        stops = [
+            (0.00, 162, 178, 243), # Azul Base
+            (0.05, 156, 39, 176),  # Morado (Inicio)
+            (0.20, 233, 30, 99),   # Rosa (Grave)
+            (0.50, 213, 0, 0),     # Rojo (Crítico)
+            (1.00, 100, 0, 0)      # Rojo Oscuro (Apocalipsis)
+        ]
+
+        for i in range(len(stops) - 1):
+            t1, r1, g1, b1 = stops[i]
+            t2, r2, g2, b2 = stops[i+1]
+
+            if porcentaje <= t2:
+                factor = (porcentaje - t1) / (t2 - t1)
+                r = int(r1 + (r2 - r1) * factor)
+                g = int(g1 + (g2 - g1) * factor)
+                b = int(b1 + (b2 - b1) * factor)
+                return f"#{r:02x}{g:02x}{b:02x}"
+        
+        return "#640000"
+
+    # =========================================================
+    # ACTUALIZACIÓN BLINDADA (Aquí estaba el error)
+    # =========================================================
+    def actualizar_datos(self, lista_paises):
+        if not self.paises or not lista_paises: return
+
+        # Creamos diccionario ignorando filas sin código
+        datos_dict = {}
+        for fila in lista_paises:
+            if "Country Code" in fila:
+                datos_dict[fila["Country Code"]] = fila
+        
+        hay_cambios_visuales = False
+        idx_min = len(self.paises)
+        idx_max = 0
+
+        for i, pais in enumerate(self.paises):
+            codigo = pais["codigo"]
+            
+            # --- CORRECCIÓN: Todo ocurre SOLO si el país existe en los datos ---
+            if codigo in datos_dict:
+                dato = datos_dict[codigo]
+                
+                # 1. Obtenemos datos seguros (con .get para evitar KeyError)
+                s = int(dato.get("S", 0))
+                i_val = int(dato.get("I", 0))
+                r = int(dato.get("R", 0))
+                m = int(dato.get("M", 0)) # Usamos 'M' para coincidir con Loader
+                
+                # 2. Población real
+                poblacion_total = s + i_val + r + m
+                if poblacion_total <= 0: poblacion_total = 1
+                
+                # 3. Cálculo de Impacto (Acumulativo: I + R + M)
+                afectados_acumulados = i_val + r + m
+                pct_infeccion = afectados_acumulados / poblacion_total
+                if pct_infeccion > 1.0: pct_infeccion = 1.0
+                
+                # 4. Cálculo de Color
+                # Definimos la variable AQUÍ DENTRO
+                nuevo_color = self.calcular_color_hex(pct_infeccion)
+                
+                # 5. Actualizar Datos Internos
+                pais["infectado"] = i_val
+                pais["recuperado"] = r
+                pais["poblacion"] = poblacion_total
+                # Actualizamos nombre si viene en el CSV (a veces el JSON tiene códigos raros)
+                if "Country Name" in dato:
+                    pais["nombre"] = dato["Country Name"]
+
+                # 6. Detección de Cambios Visuales
+                # Esta comprobación DEBE estar identada DENTRO del 'if codigo in datos_dict'
+                if pais["color"] != nuevo_color:
+                    pais["color"] = nuevo_color
+                    hay_cambios_visuales = True
+                    if i < idx_min: idx_min = i
+                    if i > idx_max: idx_max = i
+
+        # Solo emitimos señal a QML si realmente cambiaron colores (Optimización)
+        if hay_cambios_visuales:
+            top = self.index(idx_min, 0)
+            bot = self.index(idx_max, 0)
+            self.dataChanged.emit(top, bot, [self.ColorRole])
+
+--- FIN DE ARCHIVO: controllers/mapa_modelo.py ---
+
+--- INICIO DE ARCHIVO: ui/main.qml ---
+import QtQuick
+import QtQuick.Controls
+import components 
+
+ApplicationWindow {
+    id: mainWindow
+    visible: true
+    width: 1200 
+    height: 720
+    title: "Simulador SIRD - Dashboard"
+    color: "#121212"
+
+    // 1. BARRA SUPERIOR
+header: BarraSuperior {
+        onMenuClicked: opcionesDrawer.opened ? opcionesDrawer.close() : opcionesDrawer.open()
+        
+        // --- CONEXIÓN AL BACKEND ---
+        // Cuando se hace clic en Play/Pause, llamamos a la función de Python
+        onPlayPauseClicked: (isPlaying) => { 
+            console.log("QML enviando señal de Play/Pause..."); // Log en QML
+            backend.toggle_simulacion(isPlaying); // Llamada a Python
+        }
+        
+        onResetClicked: { 
+            console.log("QML enviando señal de Reinicio...");
+            backend.reiniciar(); 
+        }
+    }
+
+    // --- NUEVO: 2. BARRA INFERIOR DE ESTADO Y NOTICIAS ---
+   footer: BarraInferior {
+        id: barraInf
+        
+        dia: backend ? backend.dia : "1"
+        sanos: backend ? backend.sanos : 0
+        infectados: backend ? backend.infectados : 0
+        recuperados: backend ? backend.recuperados : 0
+        muertos: backend ? backend.muertos : 0
+        paisesInfectados: backend ? backend.paisesInfectados : 0
+        noticiaActual: backend ? backend.noticia : "Cargando..."
+    }
+
+    
+    // 3. VENTANA LATERAL (Menú)
+    MenuOpciones {
+        id: opcionesDrawer
+        y: header.height 
+        // --- AJUSTE AQUÍ: Restamos el header y el footer para que encaje perfecto ---
+        height: parent.height - header.height - footer.height 
+    }
+
+    // 4. MAPA INTERACTIVO
+    Item {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.left: parent.left
+        anchors.leftMargin: opcionesDrawer.position * opcionesDrawer.width
+        scale: 1.0 - (opcionesDrawer.position * 0.15)
+
+        Mapa {
+            anchors.fill: parent
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/main.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/Mapa.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Shapes 1.15
+
+Item {
+    id: mapRoot
+    anchors.fill: parent
+    clip: true
+
+    // =========================================================
+    // 1. TOOLTIP (Variables Globales)
+    // =========================================================
+    property string tooltipHtml: ""
+    property bool isTooltipVisible: false
+    property real tipX: 0
+    property real tipY: 0
+
+    // =========================================================
+    // 2. LÓGICA DE ZOOM (Doble Clic con Animación)
+    // =========================================================
+    function flyToCountry(mapX, mapY) {
+        let targetScale = 6.0
+        
+        // Calculamos dónde debe quedar el mapa
+        let newX = (mapRoot.width / 2) - (mapX * targetScale)
+        let newY = (mapRoot.height / 2) - (mapY * targetScale)
+
+        // Preparamos la animación
+        animScale.from = mapContainer.scale
+        animScale.to = targetScale
+        
+        animX.from = mapContainer.x
+        animX.to = newX
+        
+        animY.from = mapContainer.y
+        animY.to = newY
+        
+        // ¡Arrancamos el vuelo suave!
+        zoomAnim.restart()
+    }
+
+    // Animación SOLO para el doble clic o botones (no afecta la rueda)
+    ParallelAnimation {
+        id: zoomAnim
+        NumberAnimation { id: animX; target: mapContainer; property: "x"; duration: 600; easing.type: Easing.OutCubic }
+        NumberAnimation { id: animY; target: mapContainer; property: "y"; duration: 600; easing.type: Easing.OutCubic }
+        NumberAnimation { id: animScale; target: mapContainer; property: "scale"; duration: 600; easing.type: Easing.OutCubic }
+    }
+
+    // Zoom manual (Botones) - Usa animación
+    function setZoomManual(factor) {
+        let newScale = mapContainer.scale * factor
+        newScale = Math.max(0.5, Math.min(newScale, 30.0))
+        
+        // Hacemos zoom al centro de la pantalla
+        let centerOffsetX = (mapRoot.width / 2 - mapContainer.x) / mapContainer.scale
+        let centerOffsetY = (mapRoot.height / 2 - mapContainer.y) / mapContainer.scale
+        
+        let newX = (mapRoot.width / 2) - (centerOffsetX * newScale)
+        let newY = (mapRoot.height / 2) - (centerOffsetY * newScale)
+
+        animScale.from = mapContainer.scale
+        animScale.to = newScale
+        animX.from = mapContainer.x
+        animX.to = newX
+        animY.from = mapContainer.y
+        animY.to = newY
+        zoomAnim.restart()
+    }
+
+    // =========================================================
+    // 3. CONTENEDOR DEL MAPA
+    // =========================================================
+    Item {
+        id: mapContainer
+        width: 1010
+        height: 660
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        scale: 0.9
+        transformOrigin: Item.TopLeft 
+
+        // NOTA: He borrado los "Behavior on x/y/scale". 
+        // Esto hace que el movimiento sea instantáneo y muy rápido.
+
+        // A) Arrastre del fondo
+        DragHandler {
+            target: mapContainer
+            acceptedButtons: Qt.LeftButton
+        }
+
+        // B) Zoom con Rueda (INSTANTÁNEO)
+        WheelHandler {
+            target: mapContainer
+            onWheel: (event) => {
+                let zoomFactor = event.angleDelta.y > 0 ? 1.15 : 0.85
+                
+                // Calcular posición del mouse relativa al mapa antes del zoom
+                let mouseX_in_map = (event.x - mapContainer.x) / mapContainer.scale
+                let mouseY_in_map = (event.y - mapContainer.y) / mapContainer.scale
+                
+                let newScale = Math.max(0.5, Math.min(mapContainer.scale * zoomFactor, 30.0))
+                
+                // Aplicar cambios directamente (sin animación)
+                mapContainer.x = event.x - (mouseX_in_map * newScale)
+                mapContainer.y = event.y - (mouseY_in_map * newScale)
+                mapContainer.scale = newScale
+            }
+        }
+
+        // C) Países
+        Repeater {
+            model: mapa_modelo
+
+            Shape {
+                id: countryShape
+                width: 1010
+                height: 660
+                containsMode: Shape.FillContains
+
+                ShapePath {
+                    strokeWidth: 1.0 / mapContainer.scale 
+                    strokeColor: "white"
+                    fillColor: (model.color_pais && model.color_pais !== "") ? model.color_pais : "#CFD8DC"
+                    fillRule: ShapePath.WindingFill
+                    PathSvg { path: model.path }
+                }
+
+                MouseArea {
+                    id: countryMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    containmentMask: countryShape
+                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                    
+                    // Permite arrastrar el mapa desde un país
+                    drag.target: mapContainer
+                    drag.filterChildren: true 
+
+                    onDoubleClicked: (mouse) => {
+                        let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
+                        mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
+                    }
+
+                    // --- TOOLTIP CORREGIDO ---
+                    onEntered: {
+                        if (!countryMouse.drag.active) {
+                            try {
+                                mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
+                            } catch(e) { mapRoot.tooltipHtml = "Cargando..." }
+                            
+                            mapRoot.isTooltipVisible = true
+                            // CORRECCIÓN: Usamos mouseX/mouseY directos, no el objeto 'mouse'
+                            updateTooltipPos(mouseX, mouseY)
+                        }
+                    }
+                    
+                    onPositionChanged: (mouse) => {
+                        if (countryMouse.drag.active) {
+                            mapRoot.isTooltipVisible = false
+                        } else {
+                            // Aquí 'mouse' sí existe porque viene de la señal
+                            updateTooltipPos(mouse.x, mouse.y)
+                        }
+                    }
+
+                    onExited: mapRoot.isTooltipVisible = false
+                    onCanceled: mapRoot.isTooltipVisible = false // Por si el arrastre cancela el hover
+
+                    function updateTooltipPos(mx, my) {
+                        var pos = mapToItem(mapRoot, mx, my)
+                        mapRoot.tipX = pos.x + 15
+                        mapRoot.tipY = pos.y + 15
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================
+    // 4. EL TOOLTIP
+    // =========================================================
+    Rectangle {
+        visible: mapRoot.isTooltipVisible
+        x: mapRoot.tipX
+        y: mapRoot.tipY
+        z: 9999
+        width: infoTxt.contentWidth + 24
+        height: infoTxt.contentHeight + 16
+        color: "#2d3436"
+        radius: 4
+        border.color: "white"
+        opacity: 0.95
+
+        Text {
+            id: infoTxt
+            anchors.centerIn: parent
+            text: mapRoot.tooltipHtml
+            color: "white"
+            font.pixelSize: 13
+            textFormat: Text.RichText
+        }
+    }
+
+    // =========================================================
+    // 5. BOTONES
+    // =========================================================
+    Column {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 20
+        spacing: 10
+        RoundButton {
+            width: 50; height: 50; text: "+"; font.pixelSize: 24
+            onClicked: mapRoot.setZoomManual(1.5)
+        }
+        RoundButton {
+            width: 50; height: 50; text: "-"; font.pixelSize: 24
+            onClicked: mapRoot.setZoomManual(0.6)
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/Mapa.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/BarraInferior.qml ---
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+ToolBar {
+    id: root
+    height: 60
+    background: Rectangle { color: "#1e1e2e" }
+
+    // ========================================================
+    // PROPIEDADES 
+    // ========================================================
+    property string dia: "1"
+    property int paisesInfectados: 1
+    property string noticiaActual: "Se reporta una misteriosa enfermedad respiratoria."
+
+    property real sanos: 7800000000 
+    property real infectados: 1
+    property real recuperados: 0
+    property real muertos: 0
+
+    // ========================================================
+    // COMPONENTE DATO CORREGIDO (Sin conflictos de anclaje)
+    // ========================================================
+    component DatoSird: Item {
+        id: datoControl
+        property string icono: ""
+        property string valor: ""
+        property color colorAcento: "white"
+        property string tooltipText: "" 
+
+        // El tamaño del Item se ajusta automáticamente al tamaño del texto
+        implicitWidth: contentRow.implicitWidth
+        implicitHeight: contentRow.implicitHeight
+
+        // 1. La fila que acomoda el icono y el texto
+        Row {
+            id: contentRow
+            spacing: 5
+            anchors.verticalCenter: parent.verticalCenter
+
+            Text { text: datoControl.icono; color: datoControl.colorAcento; font.pixelSize: 18; font.bold: true }
+            Text { text: datoControl.valor; color: "white"; font.pixelSize: 16; font.bold: true }
+        }
+
+        // 2. El área táctil que cubre TODO el componente, independiente de la fila
+        MouseArea {
+            id: mouseArea
+            anchors.fill: parent
+            hoverEnabled: true
+
+            ToolTip {
+                id: infoTooltip
+                visible: mouseArea.containsMouse
+                text: datoControl.tooltipText
+                delay: 150
+                x: mouseArea.mouseX
+                y: mouseArea.mouseY - height - 10 
+
+                background: Rectangle {
+                    color: "#2f3542"
+                    radius: 4
+                    border.color: "#747d8c"
+                }
+                contentItem: Text {
+                    text: infoTooltip.text
+                    color: "white"
+                    font.pixelSize: 12
+                }
+            }
+        }
+    }
+
+    // ========================================================
+    // DISTRIBUCIÓN DE LA BARRA
+    // ========================================================
+    RowLayout {
+        anchors.fill: parent
+        anchors.leftMargin: 20
+        anchors.rightMargin: 10
+        spacing: 20
+
+        Row {
+            Layout.alignment: Qt.AlignVCenter
+            spacing: 25
+
+            DatoSird { 
+                icono: "📅 Día:"; 
+                valor: root.dia; 
+                colorAcento: "white"
+                tooltipText: "Días transcurridos desde el paciente cero"
+            }
+            DatoSird { 
+                icono: "🧍"; 
+                valor: Number(root.sanos).toLocaleString(Qt.locale(), 'f', 0); 
+                colorAcento: "#DCE775"
+                tooltipText: "Población Sana (Susceptible)"
+            }
+            DatoSird { 
+                icono: "🤒"; 
+                valor: Number(root.infectados).toLocaleString(Qt.locale(), 'f', 0); 
+                colorAcento: "#ffb8b8"
+                tooltipText: "Personas Infectadas actualmente"
+            }
+            DatoSird { 
+                icono: "💚"; 
+                valor: Number(root.recuperados).toLocaleString(Qt.locale(), 'f', 0); 
+                colorAcento: "#4fc3f7"
+                tooltipText: "Personas Recuperadas (Inmunes)"
+            }
+            DatoSird { 
+                icono: "💀"; 
+                valor: Number(root.muertos).toLocaleString(Qt.locale(), 'f', 0); 
+                colorAcento: "#747d8c"
+                tooltipText: "Muertes confirmadas"
+            }
+            DatoSird { 
+                icono: "🌍"; 
+                valor: root.paisesInfectados + "/250"; 
+                colorAcento: "#ffb74d" 
+                tooltipText: "Países con al menos un infectado"
+            }
+        }
+
+        Item { Layout.fillWidth: true }
+
+        // --- SECCIÓN DE NOTICIAS ---
+        Rectangle {
+            Layout.preferredWidth: 350
+            Layout.preferredHeight: 40
+            Layout.alignment: Qt.AlignVCenter
+            color: "#2f3542"
+            radius: 5
+            border.color: "#747d8c"
+            clip: true 
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 10
+
+                Rectangle {
+                    Layout.preferredWidth: 80
+                    Layout.preferredHeight: 20
+                    color: "#ff3f34"
+                    radius: 3
+                    Text { 
+                        anchors.centerIn: parent; text: "NOTICIA"; 
+                        color: "white"; font.pixelSize: 10; font.bold: true 
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.noticiaActual
+                    color: "white"
+                    font.pixelSize: 13
+                    font.italic: true
+                    elide: Text.ElideRight 
+                }
+            }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/BarraInferior.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/BarraSuperior.qml ---
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+ToolBar {
+    id: root
+    height: 60
+    background: Rectangle { color: "#1e1e2e" }
+
+    // --- SEÑALES PARA COMUNICARSE CON EL EXTERIOR ---
+    signal menuClicked()
+    signal playPauseClicked(bool isPlaying)
+    signal resetClicked()
+
+    // Botón Menú (Izquierda)
+    ToolButton {
+        id: menuButton
+        text: "☰"
+        font.pixelSize: 24
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: 10
+        // Al hacer clic, emite la señal
+        onClicked: root.menuClicked() 
+    }
+
+    // Botones de Simulación (Centrados)
+    Row {
+        anchors.centerIn: parent
+        spacing: 15
+
+        RoundButton {
+            id: playPauseButton
+            property bool isPlaying: false
+            width: 45; height: 45
+            
+            background: Rectangle {
+                color: playPauseButton.isPlaying ? "#ffb8b8" : "#DCE775"
+                radius: width / 2 
+            }
+            contentItem: Text {
+                text: playPauseButton.isPlaying ? "⏸" : "▶" 
+                color: "#121212"
+                font.pixelSize: 20
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            onClicked: {
+                isPlaying = !isPlaying
+                root.playPauseClicked(isPlaying) // Emite la señal
+            }
+        }
+
+        RoundButton {
+            id: resetButton
+            width: 45; height: 45
+            
+            background: Rectangle { color: "#747d8c"; radius: width / 2 }
+            contentItem: Text {
+                text: "⟲"
+                color: "white"
+                font.pixelSize: 24
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            onClicked: {
+                playPauseButton.isPlaying = false
+                root.resetClicked() // Emite la señal
+            }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/BarraSuperior.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/MenuOpciones.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+Drawer {
+    id: rootDrawer
+    width: 300
+    modal: false; dim: false; closePolicy: Popup.NoAutoClose
+    background: Rectangle { color: "#1e1e2e" }
+    
+    property bool editandoConfig: false
+
+    onOpened: if(backend) backend.pausar_simulacion()
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 20
+        spacing: 15
+
+        Text {
+            text: rootDrawer.editandoConfig ? "Configurar" : "Opciones SIRD"
+            color: "white"
+            font.bold: true
+            font.pixelSize: 22
+            Layout.alignment: Qt.AlignHCenter
+        }
+        
+        Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+        // VISTA PRINCIPAL
+        ColumnLayout {
+            visible: !rootDrawer.editandoConfig
+            Layout.fillWidth: true
+            
+            Button {
+                Layout.fillWidth: true; height: 50
+                background: Rectangle { color: "#3a3f55"; radius: 8 }
+                contentItem: Text { text: "⚙️ Parámetros"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: rootDrawer.editandoConfig = true
+            }
+        }
+
+        // VISTA SLIDERS
+        ScrollView {
+            visible: rootDrawer.editandoConfig
+            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+
+            ColumnLayout {
+                width: parent.width; spacing: 20
+
+                // === SOLUCIÓN: Usar backend.config ===
+                // Verifica que backend y config existan antes de pintar
+                
+                SliderControl {
+                    titulo: "Tasa de Contagio (β)"
+                    // Usamos backend.config
+                    valorInicial: backend ? backend.config.beta : 0.5
+                    maximo: 1.0
+                    onValorCambiado: (val) => { if(backend) backend.config.beta = val }
+                }
+
+                SliderControl {
+                    titulo: "Recuperación (γ)"
+                    valorInicial: backend ? backend.config.gamma : 0.1
+                    maximo: 0.5
+                    onValorCambiado: (val) => { if(backend) backend.config.gamma = val }
+                }
+
+                SliderControl {
+                    titulo: "Mortalidad (μ)"
+                    valorInicial: backend ? backend.config.mu : 0.01
+                    maximo: 0.1
+                    onValorCambiado: (val) => { if(backend) backend.config.mu = val }
+                }
+
+                SliderControl {
+                    titulo: "Prob. Frontera"
+                    valorInicial: backend ? backend.config.p_frontera : 1.0
+                    maximo: 1.0
+                    onValorCambiado: (val) => { if(backend) backend.config.p_frontera = val }
+                }
+
+                Item { Layout.fillHeight: true; height: 20 }
+
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#e74c3c"; radius: 8 }
+                    contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: {
+                        if(backend) backend.reiniciar_simulacion()
+                        rootDrawer.editandoConfig = false
+                    }
+                }
+
+                Button {
+                    Layout.fillWidth: true; flat: true
+                    contentItem: Text { text: "Volver"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: rootDrawer.editandoConfig = false
+                }
+            }
+        }
+    }
+
+    component SliderControl : ColumnLayout {
+        property string titulo: ""
+        property real valorInicial: 0
+        property real maximo: 1.0
+        signal valorCambiado(real val)
+
+        Layout.fillWidth: true
+        spacing: 5
+        RowLayout {
+            Layout.fillWidth: true
+            Text { text: titulo; color: "#bdc3c7"; font.bold: true; Layout.fillWidth: true }
+            Text { text: slider.value.toFixed(3); color: "#00cec9"; font.bold: true }
+        }
+        Slider {
+            id: slider
+            Layout.fillWidth: true
+            from: 0.0; to: maximo; value: valorInicial; stepSize: 0.001
+            onPressedChanged: { if (!pressed) parent.valorCambiado(value) }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/MenuOpciones.qml ---
+

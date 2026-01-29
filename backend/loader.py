@@ -12,6 +12,13 @@ class Loader:
         for col in columnas_texto:
             if col not in df.columns:
                 df[col] = "No"
+
+        if "cooldown_vuelo" not in df.columns:
+            df["cooldown_vuelo"] = 0
+        if "cooldown_puerto" not in df.columns:
+            df["cooldown_puerto"] = 0
+        if "cooldown_frontera" not in df.columns:
+            df["cooldown_frontera"] = 0
         return df
 
     def cargar_mapa(self, df):
