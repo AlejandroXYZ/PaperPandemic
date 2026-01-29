@@ -14,7 +14,7 @@ class Options(QObject):
     RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
 
     # Constantes fijas del juego
-    PAIS_INICIO = "China"
+    PAIS_INICIO = "Venezuela"
     INFECTADOS_INICIALES = 2
     INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
     UMBRAL_INFECCION_EXTERNO = 500

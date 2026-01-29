@@ -88,12 +88,15 @@ class SIR:
             # (Optimizacion: self.mapa_mundo es un dict {"Nombre": Indice})
             vecinos_indices = []
             for nombre in lista_vecinos_nombres:
-                idx = self.mapa_mundo.get(nombre)
-                if idx is None:
-                    print(f"⚠️ ALERTA: No encuentro el país vecino '{nombre}' en el mapa.")
+                 # --- FIX: Ignorar si dice "Ninguno" o "No" ---
+                 if "Ninguno" in nombre or nombre == "No": continue
+                 
+                 idx = self.mapa_mundo.get(nombre)
+                 if idx is None:
+                    # print(f"⚠️ ALERTA: No encuentro el país vecino '{nombre}' en el mapa.") # Opcional: comentar el print
                     continue
-                if idx is not None:
-                    vecinos_indices.append(idx)
+                 
+                 vecinos_indices.append(idx)
             
             if not vecinos_indices: continue
 
