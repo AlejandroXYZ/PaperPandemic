@@ -10,9 +10,10 @@ Drawer {
     closePolicy: Popup.NoAutoClose
     background: Rectangle { color: "#1e1e2e" }
     
-    // 0: Menú Principal, 1: Config, 2: Parámetros, 3: Estadísticas
+    // Control de navegación interna: 0=Menu, 1=Config, 2=Params, 3=Stats
     property int vistaActual: 0 
 
+    // Al abrir el menú, pausamos para ahorrar recursos
     onOpened: if(backend) backend.pausar_simulacion()
 
     ColumnLayout {
@@ -20,9 +21,7 @@ Drawer {
         anchors.margins: 20
         spacing: 15
 
-        // =========================================================
-        // 1. CABECERA FIJA (Siempre visible)
-        // =========================================================
+        // CABECERA
         Text {
             text: "Paper-Pandemic"
             color: "#bdc3c7"
@@ -35,9 +34,7 @@ Drawer {
             Layout.fillWidth: true; height: 2; color: "#ff5252" 
         }
 
-        // =========================================================
-        // 2. CONTENIDO CAMBIANTE (StackLayout)
-        // =========================================================
+        // CONTENIDO CAMBIANTE
         StackLayout {
             id: stackVistas
             currentIndex: rootDrawer.vistaActual
@@ -45,45 +42,38 @@ Drawer {
             Layout.fillHeight: true
 
             // -----------------------------------------------------
-            // ÍNDICE 0: MENÚ PRINCIPAL (Botones de navegación)
+            // ÍNDICE 0: MENÚ PRINCIPAL
             // -----------------------------------------------------
             ColumnLayout {
                 spacing: 15
-
                 Text { text: "Menú Principal"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
-                // Botón 1: Configuración (Placeholder)
                 Button {
                     Layout.fillWidth: true; height: 50
                     background: Rectangle { color: "#3a3f55"; radius: 8 }
                     contentItem: Text { text: "🔧 Configuración"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: rootDrawer.vistaActual = 1 // Ir a Config
+                    onClicked: rootDrawer.vistaActual = 1
                 }
 
-                // Botón 2: Parámetros (El que funciona)
                 Button {
                     Layout.fillWidth: true; height: 50
                     background: Rectangle { color: "#3a3f55"; radius: 8 }
                     contentItem: Text { text: "⚙️ Parámetros"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: rootDrawer.vistaActual = 2 // Ir a Sliders
+                    onClicked: rootDrawer.vistaActual = 2
                 }
 
-                // Botón 3: Estadísticas (Placeholder)
                 Button {
                     Layout.fillWidth: true; height: 50
                     background: Rectangle { color: "#3a3f55"; radius: 8 }
                     contentItem: Text { text: "📊 Estadísticas"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: rootDrawer.vistaActual = 3 // Ir a Stats
+                    onClicked: rootDrawer.vistaActual = 3
                 }
 
-                Item { Layout.fillHeight: true } // Espaciador
-
-
-                Text { text: "Creado por: Alejandro Moncada"; color: "white"; font.pixelSize: 12; Layout.alignment: Qt.AlignHCenter}
+                Item { Layout.fillHeight: true }
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 1: CONFIGURACIÓN (Futuro)
+            // ÍNDICE 1: CONFIGURACIÓN
             // -----------------------------------------------------
             ColumnLayout {
                 Text { text: "Configuración"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
@@ -96,15 +86,14 @@ Drawer {
                 Item { Layout.fillHeight: true }
                 
                 Button {
-                    Layout.fillWidth: true
-                    flat: true
+                    Layout.fillWidth: true; flat: true
                     contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: rootDrawer.vistaActual = 0
                 }
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 2: PARÁMETROS (Tus sliders)
+            // ÍNDICE 2: PARÁMETROS (SLIDERS)
             // -----------------------------------------------------
             ScrollView {
                 clip: true
@@ -152,13 +141,12 @@ Drawer {
                         contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                         onClicked: {
                             if(backend) backend.reiniciar_simulacion()
-                            // No volvemos al menú automáticamente, dejamos al usuario aquí
+                            // Nos quedamos aquí para ver el cambio
                         }
                     }
 
                     Button {
-                        Layout.fillWidth: true
-                        flat: true
+                        Layout.fillWidth: true; flat: true
                         contentItem: Text { text: "⬅ Volver al Menú"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
                         onClicked: rootDrawer.vistaActual = 0
                     }
@@ -166,21 +154,46 @@ Drawer {
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 3: ESTADÍSTICAS (Futuro)
+            // ÍNDICE 3: ESTADÍSTICAS
             // -----------------------------------------------------
             ColumnLayout {
                 Text { text: "Estadísticas"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
+                Item { Layout.fillHeight: true; height: 20 }
+
+                // BOTÓN: VER CURVA HISTÓRICA
+                Button {
+                    Layout.fillWidth: true; height: 60
+                    background: Rectangle { 
+                        color: "#2ecc71" 
+                        radius: 8 
+                    }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "📈"; font.pixelSize: 24 }
+                        Text { text: "Ver Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                    }
+                    
+                    onClicked: {
+                        if(backend) backend.pausar_simulacion()
+                        
+                        // Cambiamos la vista principal en main.qml
+                        mainWindow.vistaActual = "grafico"
+                        
+                        // Cerramos el menú
+                        rootDrawer.close()
+                    }
+                }
+
                 Text { 
-                    text: "Próximamente...\nGráficas en tiempo real\ny curvas SIRD." 
-                    color: "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
+                    text: "El mapa se cerrará temporalmente\npara optimizar el rendimiento." 
+                    color: "#7f8c8d"; font.italic: true; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
                 }
                 
                 Item { Layout.fillHeight: true }
                 
                 Button {
-                    Layout.fillWidth: true
-                    flat: true
+                    Layout.fillWidth: true; flat: true
                     contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: rootDrawer.vistaActual = 0
                 }
@@ -188,7 +201,7 @@ Drawer {
         }
     }
 
-    // COMPONENTE SLIDER (Reutilizado)
+    // COMPONENTE SLIDER REUTILIZABLE
     component SliderControl : ColumnLayout {
         property string titulo: ""
         property real valorInicial: 0
@@ -206,7 +219,7 @@ Drawer {
             id: slider
             Layout.fillWidth: true
             from: 0.0; to: maximo; value: valorInicial; stepSize: 0.001
-            onMoved: parent.valorCambiado(value) // Usamos onMoved para tiempo real
+            onMoved: parent.valorCambiado(value) // Actualización en tiempo real
         }
     }
 }

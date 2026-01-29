@@ -23,6 +23,7 @@ class Engine():
             self.historial = self.csv.historial() 
                         
             self.primer_pais = None 
+            
         else:
         # CASO B: Cargar Partida Existente (Guinea sigue viva aquí)
             self.dataframe = self.csv.cargar_db()
@@ -39,12 +40,14 @@ class Engine():
             val = self.historial["Primer_pais"].iloc[0]
             self.primer_pais = val if val else "Desconocido"
         else:
+
             # 2. Si NO hay historial (partida nueva), usamos tu configuración de options.py
-            pais_idx = self.opt.INDEX_PAIS_A_INFECTAR
-            if pais_idx in self.dataframe.index:
-                self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
+            nombre_target = self.opt.PAIS_INICIO
+            # Verificamos si existe en la columna de nombres del DF
+            if nombre_target in self.dataframe["Country Name"].values:
+                self.primer_pais = nombre_target
             else:
-                self.primer_pais = "Desconocido"
+                self.primer_pais = "Desconocido (Error Nombre)"
             
         # Cargar mapa y modelo...
         self.mapa = self.csv.cargar_mapa(self.dataframe)
@@ -75,7 +78,7 @@ class Engine():
             print("☣️ Paciente Cero detectado.")
             self.sir.infectar_primera_vez()
             
-            pais_idx = self.opt.INDEX_PAIS_A_INFECTAR
+            pais_idx = self.opt.PAIS_INICIO
             if pais_idx in self.dataframe.index:
                 self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
             else:
@@ -132,8 +135,9 @@ class Engine():
         
         try:
             self.csv.guardar_estados(resultado, self.primer_pais)
-        except:
-            pass 
+        except Exception as e:
+            print(e)
+             
 
         return {
             "status": "PLAYING",

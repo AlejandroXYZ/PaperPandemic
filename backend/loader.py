@@ -90,7 +90,8 @@ class Loader:
             df = pd.read_sql("SELECT * FROM historial", conn)
             conn.close()
             return df
-        except:
+        except Exception as e:
+            print(e)
             return pd.DataFrame()
         
     def crear_db(self):
@@ -150,12 +151,17 @@ class Loader:
                 if not res.empty: ultimo_dia = int(res.iloc[0, 0])
             except: pass
             
+            # CONVERSIÓN EXPLÍCITA A FLOAT PARA EVITAR OVERFLOW EN 32 BITS
             dicc = {
-                "total_S": datos["S"].sum(), "total_R": datos["R"].sum(),            
-                "total_I": datos["I"].sum(), "total_M": datos["M"].sum(),
-                "dia": ultimo_dia + 1, "Primer_pais": pais,
-                "Paises_Infectados": (datos["I"] > 0).sum()
+                "total_S": float(datos["S"].astype(float).sum()), 
+                "total_R": float(datos["R"].astype(float).sum()),            
+                "total_I": float(datos["I"].astype(float).sum()), 
+                "total_M": float(datos["M"].astype(float).sum()),
+                "dia": ultimo_dia + 1, 
+                "Primer_pais": pais,
+                "Paises_Infectados": int((datos["I"] > 0).sum())
             }
+            
             pd.DataFrame([dicc]).to_sql("historial", conn, if_exists="append", index=False)         
             datos.to_sql("estado_actual", conn, if_exists="replace", index=False)         
             conn.close()

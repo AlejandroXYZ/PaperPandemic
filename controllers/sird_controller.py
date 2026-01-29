@@ -210,3 +210,34 @@ class ControladorSIRD(QObject):
             self.pausar_simulacion()
             self._noticia = f"🏁 FIN: {status}"
             self.noticiaCambio.emit(self._noticia)
+
+    @Slot(result=list)
+    def obtener_datos_historial(self):
+        """
+        Devuelve una lista de 5 listas: [Dias, S, I, R, M]
+        Optimizado para graficar rápido.
+        """
+        if not hasattr(self.motor, 'historial'): return []
+        
+        # Obtenemos el DataFrame del historial
+        # Si está vacío, intentamos recargar de la DB
+        df = self.motor.historial
+        if df.empty:
+             df = self.motor.csv.historial()
+        
+        if df.empty: return []
+
+        # Extraemos columnas como listas simples de Python (JSON compatible)
+        # Aseguramos que estén ordenados por día
+        try:
+            # Convertir a numérico por seguridad
+            dias = df["dia"].astype(int).tolist()
+            s = df["total_S"].astype(float).tolist()
+            i = df["total_I"].astype(float).tolist()
+            r = df["total_R"].astype(float).tolist()
+            m = df["total_M"].astype(float).tolist()
+            
+            return [dias, s, i, r, m]
+        except Exception as e:
+            print(f"Error extrayendo historial: {e}")
+            return []

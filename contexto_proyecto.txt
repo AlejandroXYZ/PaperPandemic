@@ -54,36 +54,53 @@ class Engine():
     def __init__(self, opciones_instancia):
         self.opt = opciones_instancia    
         self.csv = Loader(self.opt)
-        
+                    
         # Intentar crear/conectar DB
+        # self.db devuelve True si es NUEVA, False si ya EXISTÍA
         self.db = self.csv.crear_db()
-        
-        # --- NUEVO: CONTADOR DE DÍAS INTERNO ---
         self.dia_simulacion = 1 
-        
+                    
+        # --- LÓGICA DE CARGA SEGURA ---
         if self.db:            
-            self.primer_pais = None
+            # CASO A: Partida Nueva (Acabas de borrar la DB o es la primera vez)
             self.dataframe = self.csv.cargar_df()
+                        
+            # --- FIX: CREAR HISTORIAL VACÍO ---
+            # Antes faltaba esta línea, por eso fallaba al decir 'object has no attribute historial'
+            self.historial = self.csv.historial() 
+                        
+            self.primer_pais = None 
+            
         else:
+        # CASO B: Cargar Partida Existente (Guinea sigue viva aquí)
             self.dataframe = self.csv.cargar_db()
             self.historial = self.csv.historial()
-            
-            # Si cargamos partida, intentamos recuperar el día donde nos quedamos
+                        
+            # Recuperar día guardado
             if not self.historial.empty:
-                try:
-                    self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
-                except:
-                    self.dia_simulacion = 1
+                try: self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
+                except: self.dia_simulacion = 1
+                    
+        # --- LÓGICA DE NOMBRE (Ahora ya es seguro ejecutar esto) ---
+        # 1. Si hay historial (partida cargada), respetamos el país original
+        if not self.historial.empty and "Primer_pais" in self.historial.columns:
+            val = self.historial["Primer_pais"].iloc[0]
+            self.primer_pais = val if val else "Desconocido"
+        else:
 
-            if not self.historial.empty and "Primer_pais" in self.historial.columns:
-                self.primer_pais = self.historial["Primer_pais"].iloc[0]
+            # 2. Si NO hay historial (partida nueva), usamos tu configuración de options.py
+            nombre_target = self.opt.PAIS_INICIO
+            # Verificamos si existe en la columna de nombres del DF
+            if nombre_target in self.dataframe["Country Name"].values:
+                self.primer_pais = nombre_target
             else:
-                self.primer_pais = "Desconocido"
-
+                self.primer_pais = "Desconocido (Error Nombre)"
+            
+        # Cargar mapa y modelo...
         self.mapa = self.csv.cargar_mapa(self.dataframe)
         self.sir = SIR(mapa_mundo=self.mapa, df=self.dataframe, opt=self.opt)
-        
-        # Precarga de vecinos del paciente cero (Optimización)
+                    
+        # Precarga de vecinos (igual que antes)
         if self.primer_pais and self.primer_pais != "Desconocido":
             vecinos = self.sir.buscar_vecinos(self.primer_pais)
             self.indices_vecinos_zona_cero = np.array(vecinos) if vecinos else np.array([])
@@ -108,7 +125,7 @@ class Engine():
             print("☣️ Paciente Cero detectado.")
             self.sir.infectar_primera_vez()
             
-            pais_idx = self.opt.INDEX_PAIS_A_INFECTAR
+            pais_idx = self.opt.PAIS_INICIO
             if pais_idx in self.dataframe.index:
                 self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
             else:
@@ -165,8 +182,9 @@ class Engine():
         
         try:
             self.csv.guardar_estados(resultado, self.primer_pais)
-        except:
-            pass 
+        except Exceptiona as e:
+            print(e)
+             
 
         return {
             "status": "PLAYING",
@@ -198,15 +216,34 @@ class SIR:
         self._mascara_vuelos = self.df["vuelo"].astype(str).str.lower().str.contains(filtro)
         self._mascara_puertos = self.df["puerto"].astype(str).str.lower().str.contains(filtro)
 
+
+
     def infectar_primera_vez(self):
         infectados_iniciales = self.opt.INFECTADOS_INICIALES
-        paciente_cero_index = self.opt.INDEX_PAIS_A_INFECTAR
         
+        # --- CAMBIO: BÚSQUEDA POR NOMBRE ---
+        nombre_objetivo = self.opt.PAIS_INICIO
+        
+        # Buscamos el índice en el mapa (O(1) - Muy rápido)
+        paciente_cero_index = self.mapa_mundo.get(nombre_objetivo)
+        
+        # Blindaje: Si escribiste mal el nombre, usamos el primer país disponible
+        if paciente_cero_index is None:
+            print(f"⚠️ ERROR CRÍTICO: No encuentro el país '{nombre_objetivo}' en la base de datos.")
+            print("➡️ Usando el primer país de la lista como fallback.")
+            paciente_cero_index = self.df.index[0]
+            # Opcional: Actualizar el nombre en opciones para que la UI lo sepa
+            self.opt.PAIS_INICIO = self.df.at[paciente_cero_index, "Country Name"]
+        
+        # El resto sigue igual...
         poblacion_pais = self.df.loc[paciente_cero_index, "poblacion"]
         infectados_reales = min(infectados_iniciales, poblacion_pais)
         
         self.df.loc[paciente_cero_index,"S"] -= infectados_reales
         self.df.loc[paciente_cero_index,"I"] += infectados_reales
+        
+
+
 
     def actualizar_cooldowns(self):
         """Resta 1 día al contador de espera de todos los países"""
@@ -552,7 +589,8 @@ class Loader:
             df = pd.read_sql("SELECT * FROM historial", conn)
             conn.close()
             return df
-        except:
+        except Exception as e:
+            print(e)
             return pd.DataFrame()
         
     def crear_db(self):
@@ -612,12 +650,17 @@ class Loader:
                 if not res.empty: ultimo_dia = int(res.iloc[0, 0])
             except: pass
             
+            # CONVERSIÓN EXPLÍCITA A FLOAT PARA EVITAR OVERFLOW EN 32 BITS
             dicc = {
-                "total_S": datos["S"].sum(), "total_R": datos["R"].sum(),            
-                "total_I": datos["I"].sum(), "total_M": datos["M"].sum(),
-                "dia": ultimo_dia + 1, "Primer_pais": pais,
-                "Paises_Infectados": (datos["I"] > 0).sum()
+                "total_S": float(datos["S"].astype(float).sum()), 
+                "total_R": float(datos["R"].astype(float).sum()),            
+                "total_I": float(datos["I"].astype(float).sum()), 
+                "total_M": float(datos["M"].astype(float).sum()),
+                "dia": ultimo_dia + 1, 
+                "Primer_pais": pais,
+                "Paises_Infectados": int((datos["I"] > 0).sum())
             }
+            
             pd.DataFrame([dicc]).to_sql("historial", conn, if_exists="append", index=False)         
             datos.to_sql("estado_actual", conn, if_exists="replace", index=False)         
             conn.close()
@@ -652,7 +695,7 @@ class Options(QObject):
     RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
 
     # Constantes fijas del juego
-    INDEX_PAIS_A_INFECTAR = 88
+    PAIS_INICIO = "China"
     INFECTADOS_INICIALES = 2
     INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
     UMBRAL_INFECCION_EXTERNO = 500
@@ -753,12 +796,13 @@ class ControladorSIRD(QObject):
         self.motor = Engine(self.opciones) # Pasamos opciones al motor
 
         # 2. Variables de estado
-        self._dia = "Día 1"
+        self._dia = "1"
         self._sanos = 0
         self._infectados = 0
         self._recuperados = 0
         self._muertos = 0
         self._paisesInfectados = 0
+        self._primerPais = "Esperando..."
         self._noticia = "Preparado. Pulsa Play."
         
         self.timer = QTimer()
@@ -789,6 +833,9 @@ class ControladorSIRD(QObject):
     # Este puede quedarse en int porque nunca habrá más de 200 países
     @Property(int, notify=statsChanged)
     def paisesInfectados(self): return self._paisesInfectados
+
+    @Property(str, notify=statsChanged)
+    def primerPais(self): return self._primerPais
 
     @Property(str, notify=diaChanged)
     def dia(self): return str(self._dia)
@@ -881,6 +928,22 @@ class ControladorSIRD(QObject):
         if hasattr(self.motor, 'dataframe'):
              # Construimos un 'resultado' falso solo para actualizar la UI
              df = self.motor.dataframe
+             nombre = getattr(self.motor, 'primer_pais', "Desconocido")
+
+             
+             if not nombre or nombre == "Desconocido":
+                 # INTENTO DE RESCATE: Si el motor no sabe, miramos si alguien tiene infectados
+                 infectados = df[df["I"] > 0]
+                 if not infectados.empty:
+                     nombre = infectados.iloc[0]["Country Name"]
+                 else:
+                     # Si nadie está infectado aún (Día 0), predecimos quién será
+                     idx_target = self.opciones.INDEX_PAIS_A_INFECTAR
+                     if idx_target in df.index:
+                         nombre = df.loc[idx_target, "Country Name"]
+                         
+             self._primerPais = str(nombre) if nombre else "Desconocido"
+             
              totales = {
                  "S": int(df["S"].sum()),
                  "I": int(df["I"].sum()),
@@ -892,7 +955,7 @@ class ControladorSIRD(QObject):
              self._infectados = totales["I"]
              self._recuperados = totales["R"]
              self._muertos = totales["M"]
-             self._dia = "Día 1"
+             self._dia = "1"
              self.statsChanged.emit()
              self.diaChanged.emit(self._dia)
              self.noticiaCambio.emit(self._noticia)
@@ -924,6 +987,37 @@ class ControladorSIRD(QObject):
             self._noticia = f"🏁 FIN: {status}"
             self.noticiaCambio.emit(self._noticia)
 
+    @Slot(result=list)
+    def obtener_datos_historial(self):
+        """
+        Devuelve una lista de 5 listas: [Dias, S, I, R, M]
+        Optimizado para graficar rápido.
+        """
+        if not hasattr(self.motor, 'historial'): return []
+        
+        # Obtenemos el DataFrame del historial
+        # Si está vacío, intentamos recargar de la DB
+        df = self.motor.historial
+        if df.empty and self.motor.db:
+             df = self.motor.csv.historial()
+        
+        if df.empty: return []
+
+        # Extraemos columnas como listas simples de Python (JSON compatible)
+        # Aseguramos que estén ordenados por día
+        try:
+            # Convertir a numérico por seguridad
+            dias = df["dia"].astype(int).tolist()
+            s = df["total_S"].astype(float).tolist()
+            i = df["total_I"].astype(float).tolist()
+            r = df["total_R"].astype(float).tolist()
+            m = df["total_M"].astype(float).tolist()
+            
+            return [dias, s, i, r, m]
+        except Exception as e:
+            print(f"Error extrayendo historial: {e}")
+            return []
+
 --- FIN DE ARCHIVO: controllers/sird_controller.py ---
 
 --- INICIO DE ARCHIVO: controllers/mapa_modelo.py ---
@@ -945,6 +1039,7 @@ class MapaModeloSIRD(QAbstractListModel):
         
         # Cargar geometría del mapa
         try:
+            # Truco para ruta segura
             BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             json_path = os.path.join(BASE_DIR, "ui", "assets", "paises.json")
             with open(json_path, encoding='utf-8') as f:
@@ -959,7 +1054,6 @@ class MapaModeloSIRD(QAbstractListModel):
         """Estado inicial: Todo azul tranquilo"""
         self.beginResetModel()
         self.paises = []
-        # Color base solicitado: #A2B2F3 (Azul claro)
         for codigo, path in self.geometria.items():
             self.paises.append({
                 "codigo": codigo,
@@ -986,9 +1080,7 @@ class MapaModeloSIRD(QAbstractListModel):
         return len(self.paises)
 
     def data(self, index, role):
-        if not index.isValid(): return None
-        if index.row() >= len(self.paises): return None
-        
+        if not index.isValid() or index.row() >= len(self.paises): return None
         pais = self.paises[index.row()]
         
         if role == self.CodigoRole: return pais["codigo"]
@@ -1005,99 +1097,70 @@ class MapaModeloSIRD(QAbstractListModel):
             if pais["codigo"] == codigo_pais:
                 pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
                 pct = (pais['infectado'] / pob) * 100
-                
                 return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
                         f"👥 Población: {pob:,}<br>"
                         f"🤒 Infectados: {pais['infectado']:,} ({pct:.2f}%)<br>"
                         f"💚 Recuperados: {pais['recuperado']:,}")
         return "Sin datos"
 
-    # =========================================================
-    # MOTOR DE COLORES
-    # =========================================================
     def calcular_color_hex(self, porcentaje):
-        # porcentaje de 0.0 a 1.0
+        # Gradiente normalizado 0.0 a 1.0
         stops = [
             (0.00, 162, 178, 243), # Azul Base
-            (0.05, 156, 39, 176),  # Morado (Inicio)
-            (0.20, 233, 30, 99),   # Rosa (Grave)
-            (0.50, 213, 0, 0),     # Rojo (Crítico)
-            (1.00, 100, 0, 0)      # Rojo Oscuro (Apocalipsis)
+            (0.25, 156, 39, 176),  # Morado
+            (0.50, 233, 30, 99),   # Rosa
+            (0.75, 213, 0, 0),     # Rojo
+            (1.00, 100, 0, 0)      # Rojo Oscuro
         ]
-
         for i in range(len(stops) - 1):
             t1, r1, g1, b1 = stops[i]
             t2, r2, g2, b2 = stops[i+1]
-
             if porcentaje <= t2:
                 factor = (porcentaje - t1) / (t2 - t1)
                 r = int(r1 + (r2 - r1) * factor)
                 g = int(g1 + (g2 - g1) * factor)
                 b = int(b1 + (b2 - b1) * factor)
                 return f"#{r:02x}{g:02x}{b:02x}"
-        
         return "#640000"
 
-    # =========================================================
-    # ACTUALIZACIÓN BLINDADA (Aquí estaba el error)
-    # =========================================================
     def actualizar_datos(self, lista_paises):
         if not self.paises or not lista_paises: return
-
-        # Creamos diccionario ignorando filas sin código
-        datos_dict = {}
-        for fila in lista_paises:
-            if "Country Code" in fila:
-                datos_dict[fila["Country Code"]] = fila
         
-        hay_cambios_visuales = False
-        idx_min = len(self.paises)
-        idx_max = 0
+        # Diccionario para acceso rápido O(1)
+        datos_dict = { fila["Country Code"]: fila for fila in lista_paises if "Country Code" in fila }
+        
+        hay_cambios = False
+        idx_min, idx_max = len(self.paises), 0
 
         for i, pais in enumerate(self.paises):
             codigo = pais["codigo"]
-            
-            # --- CORRECCIÓN: Todo ocurre SOLO si el país existe en los datos ---
             if codigo in datos_dict:
                 dato = datos_dict[codigo]
                 
-                # 1. Obtenemos datos seguros (con .get para evitar KeyError)
-                s = int(dato.get("S", 0))
                 i_val = int(dato.get("I", 0))
-                r = int(dato.get("R", 0))
-                m = int(dato.get("M", 0)) # Usamos 'M' para coincidir con Loader
+                r_val = int(dato.get("R", 0))
+                m_val = int(dato.get("M", 0))
+                pob = int(dato.get("S", 0)) + i_val + r_val + m_val
                 
-                # 2. Población real
-                poblacion_total = s + i_val + r + m
-                if poblacion_total <= 0: poblacion_total = 1
-                
-                # 3. Cálculo de Impacto (Acumulativo: I + R + M)
-                afectados_acumulados = i_val + r + m
-                pct_infeccion = afectados_acumulados / poblacion_total
-                if pct_infeccion > 1.0: pct_infeccion = 1.0
-                
-                # 4. Cálculo de Color
-                # Definimos la variable AQUÍ DENTRO
-                nuevo_color = self.calcular_color_hex(pct_infeccion)
-                
-                # 5. Actualizar Datos Internos
+                if pob <= 0: pob = 1
+                pais["poblacion"] = pob
                 pais["infectado"] = i_val
-                pais["recuperado"] = r
-                pais["poblacion"] = poblacion_total
-                # Actualizamos nombre si viene en el CSV (a veces el JSON tiene códigos raros)
+                pais["recuperado"] = r_val
+                
                 if "Country Name" in dato:
                     pais["nombre"] = dato["Country Name"]
-
-                # 6. Detección de Cambios Visuales
-                # Esta comprobación DEBE estar identada DENTRO del 'if codigo in datos_dict'
+                
+                # Color
+                pct = (i_val + r_val + m_val) / pob
+                nuevo_color = self.calcular_color_hex(pct)
+                
                 if pais["color"] != nuevo_color:
                     pais["color"] = nuevo_color
-                    hay_cambios_visuales = True
-                    if i < idx_min: idx_min = i
-                    if i > idx_max: idx_max = i
+                    hay_cambios = True
+                    idx_min = min(idx_min, i)
+                    idx_max = max(idx_max, i)
 
-        # Solo emitimos señal a QML si realmente cambiaron colores (Optimización)
-        if hay_cambios_visuales:
+        if hay_cambios:
             top = self.index(idx_min, 0)
             bot = self.index(idx_max, 0)
             self.dataChanged.emit(top, bot, [self.ColorRole])
@@ -1107,38 +1170,41 @@ class MapaModeloSIRD(QAbstractListModel):
 --- INICIO DE ARCHIVO: ui/main.qml ---
 import QtQuick
 import QtQuick.Controls
-import components 
+import components
 
 ApplicationWindow {
     id: mainWindow
     visible: true
-    width: 1200 
+    width: 1200
     height: 720
     title: "Simulador SIRD - Dashboard"
     color: "#121212"
 
+    // Propiedad de estado: controla si vemos el "mapa" o el "grafico"
+    property string vistaActual: "mapa"
+
     // 1. BARRA SUPERIOR
-header: BarraSuperior {
+    header: BarraSuperior {
         onMenuClicked: opcionesDrawer.opened ? opcionesDrawer.close() : opcionesDrawer.open()
-        
-        // --- CONEXIÓN AL BACKEND ---
-        // Cuando se hace clic en Play/Pause, llamamos a la función de Python
-        onPlayPauseClicked: (isPlaying) => { 
-            console.log("QML enviando señal de Play/Pause..."); // Log en QML
-            backend.toggle_simulacion(isPlaying); // Llamada a Python
+
+        // Conexión al Backend
+        onPlayPauseClicked: (isPlaying) => {
+            if(backend) backend.toggle_simulacion(isPlaying);
         }
-        
-        onResetClicked: { 
-            console.log("QML enviando señal de Reinicio...");
-            backend.reiniciar(); 
+
+        onResetClicked: {
+            if(backend) backend.reiniciar();
         }
     }
 
-    // --- NUEVO: 2. BARRA INFERIOR DE ESTADO Y NOTICIAS ---
-   footer: BarraInferior {
+    // 2. BARRA INFERIOR
+    footer: BarraInferior {
         id: barraInf
         
+        // Data Bindings seguros
         dia: backend ? backend.dia : "1"
+        primerPaisNombre: backend ? backend.primerPais : "..."
+        
         sanos: backend ? backend.sanos : 0
         infectados: backend ? backend.infectados : 0
         recuperados: backend ? backend.recuperados : 0
@@ -1147,26 +1213,52 @@ header: BarraSuperior {
         noticiaActual: backend ? backend.noticia : "Cargando..."
     }
 
-    
-    // 3. VENTANA LATERAL (Menú)
+    // 3. MENÚ LATERAL (Drawer)
     MenuOpciones {
         id: opcionesDrawer
-        y: header.height 
-        // --- AJUSTE AQUÍ: Restamos el header y el footer para que encaje perfecto ---
-        height: parent.height - header.height - footer.height 
+        y: header.height
+        height: parent.height - header.height - footer.height
     }
 
-    // 4. MAPA INTERACTIVO
+    // 4. CONTENEDOR PRINCIPAL (Loader Dinámico)
     Item {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         anchors.left: parent.left
+        
+        // Efecto visual: El contenido se encoge cuando sale el menú
         anchors.leftMargin: opcionesDrawer.position * opcionesDrawer.width
-        scale: 1.0 - (opcionesDrawer.position * 0.15)
+        scale: vistaActual === "mapa" ? (1.0 - (opcionesDrawer.position * 0.15)) : 1.0
 
+        // EL CEREBRO DE LA OPTIMIZACIÓN:
+        // Carga y destruye componentes según se necesiten
+        Loader {
+            id: mainLoader
+            anchors.fill: parent
+            sourceComponent: mainWindow.vistaActual === "mapa" ? compMapa : compGrafico
+        }
+    }
+
+    // --- COMPONENTES DINÁMICOS ---
+
+    // A) El Mapa (Se destruye al ver gráficas para ahorrar CPU)
+    Component {
+        id: compMapa
         Mapa {
             anchors.fill: parent
+        }
+    }
+
+    // B) El Gráfico Histórico
+    Component {
+        id: compGrafico
+        VistaGrafica {
+            anchors.fill: parent
+            // Al volver, restauramos la vista del mapa
+            onVolverClicked: {
+                mainWindow.vistaActual = "mapa"
+            }
         }
     }
 }
@@ -1420,6 +1512,7 @@ ToolBar {
     property real infectados: 1
     property real recuperados: 0
     property real muertos: 0
+    property string primerPaisNombre: "..."
 
     // ========================================================
     // COMPONENTE DATO CORREGIDO (Sin conflictos de anclaje)
@@ -1521,6 +1614,12 @@ ToolBar {
                 valor: root.paisesInfectados + "/250"; 
                 colorAcento: "#ffb74d" 
                 tooltipText: "Países con al menos un infectado"
+            }
+            DatoSird { 
+                icono: "☣️ Origen:"; 
+                valor: root.primerPaisNombre; 
+                colorAcento: "#ff5252" // Rojo alerta
+                tooltipText: "País Paciente Cero"
             }
         }
 
@@ -1654,11 +1753,15 @@ import QtQuick.Layouts 1.15
 Drawer {
     id: rootDrawer
     width: 300
-    modal: false; dim: false; closePolicy: Popup.NoAutoClose
+    modal: false
+    dim: false
+    closePolicy: Popup.NoAutoClose
     background: Rectangle { color: "#1e1e2e" }
     
-    property bool editandoConfig: false
+    // Control de navegación interna: 0=Menu, 1=Config, 2=Params, 3=Stats
+    property int vistaActual: 0 
 
+    // Al abrir el menú, pausamos para ahorrar recursos
     onOpened: if(backend) backend.pausar_simulacion()
 
     ColumnLayout {
@@ -1666,99 +1769,187 @@ Drawer {
         anchors.margins: 20
         spacing: 15
 
+        // CABECERA
         Text {
-            text: rootDrawer.editandoConfig ? "Configurar" : "Opciones SIRD"
-            color: "white"
+            text: "Paper-Pandemic"
+            color: "#bdc3c7"
             font.bold: true
-            font.pixelSize: 22
+            font.pixelSize: 24
             Layout.alignment: Qt.AlignHCenter
         }
         
-        Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
-
-        // VISTA PRINCIPAL
-        ColumnLayout {
-            visible: !rootDrawer.editandoConfig
-            Layout.fillWidth: true
-            
-            Button {
-                Layout.fillWidth: true; height: 50
-                background: Rectangle { color: "#3a3f55"; radius: 8 }
-                contentItem: Text { text: "⚙️ Parámetros"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                onClicked: rootDrawer.editandoConfig = true
-            }
+        Rectangle { 
+            Layout.fillWidth: true; height: 2; color: "#ff5252" 
         }
 
-        // VISTA SLIDERS
-        ScrollView {
-            visible: rootDrawer.editandoConfig
-            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+        // CONTENIDO CAMBIANTE
+        StackLayout {
+            id: stackVistas
+            currentIndex: rootDrawer.vistaActual
+            Layout.fillWidth: true
+            Layout.fillHeight: true
 
+            // -----------------------------------------------------
+            // ÍNDICE 0: MENÚ PRINCIPAL
+            // -----------------------------------------------------
             ColumnLayout {
-                width: parent.width; spacing: 20
-
-                SliderControl {
-                    titulo: "⏩ Velocidad Simulación"
-                    // Valor inicial 0.5 (mitad, aprox 1 seg)
-                    valorInicial: 0.5 
-                    maximo: 2.0
-                                    
-                    // Al moverlo, llamamos al nuevo método del backend
-                    onValorCambiado: (val) => { 
-                    if(backend) backend.cambiar_velocidad(val) 
-                    }
-                }
-                
-                SliderControl {
-                    titulo: "Tasa de Contagio (β)"
-                    // Usamos backend.config
-                    valorInicial: backend ? backend.config.beta : 0.5
-                    maximo: 1.0
-                    onValorCambiado: (val) => { if(backend) backend.config.beta = val }
-                }
-
-                SliderControl {
-                    titulo: "Recuperación (γ)"
-                    valorInicial: backend ? backend.config.gamma : 0.1
-                    maximo: 0.5
-                    onValorCambiado: (val) => { if(backend) backend.config.gamma = val }
-                }
-
-                SliderControl {
-                    titulo: "Mortalidad (μ)"
-                    valorInicial: backend ? backend.config.mu : 0.01
-                    maximo: 0.1
-                    onValorCambiado: (val) => { if(backend) backend.config.mu = val }
-                }
-
-                SliderControl {
-                    titulo: "Prob. Frontera"
-                    valorInicial: backend ? backend.config.p_frontera : 1.0
-                    maximo: 1.0
-                    onValorCambiado: (val) => { if(backend) backend.config.p_frontera = val }
-                }
-
-                Item { Layout.fillHeight: true; height: 20 }
+                spacing: 15
+                Text { text: "Menú Principal"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
                 Button {
                     Layout.fillWidth: true; height: 50
-                    background: Rectangle { color: "#e74c3c"; radius: 8 }
-                    contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: {
-                        if(backend) backend.reiniciar_simulacion()
-                        rootDrawer.editandoConfig = false
-                    }
+                    background: Rectangle { color: "#3a3f55"; radius: 8 }
+                    contentItem: Text { text: "🔧 Configuración"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: rootDrawer.vistaActual = 1
                 }
 
                 Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#3a3f55"; radius: 8 }
+                    contentItem: Text { text: "⚙️ Parámetros"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: rootDrawer.vistaActual = 2
+                }
+
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#3a3f55"; radius: 8 }
+                    contentItem: Text { text: "📊 Estadísticas"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: rootDrawer.vistaActual = 3
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+
+            // -----------------------------------------------------
+            // ÍNDICE 1: CONFIGURACIÓN
+            // -----------------------------------------------------
+            ColumnLayout {
+                Text { text: "Configuración"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+                
+                Text { 
+                    text: "Próximamente...\nAquí podrás cambiar el idioma,\ntemas de color, etc." 
+                    color: "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
+                }
+                
+                Item { Layout.fillHeight: true }
+                
+                Button {
                     Layout.fillWidth: true; flat: true
-                    contentItem: Text { text: "Volver"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
-                    onClicked: rootDrawer.editandoConfig = false
+                    contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: rootDrawer.vistaActual = 0
+                }
+            }
+
+            // -----------------------------------------------------
+            // ÍNDICE 2: PARÁMETROS (SLIDERS)
+            // -----------------------------------------------------
+            ScrollView {
+                clip: true
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 20
+
+                    Text { text: "Ajuste de Variables"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+
+                    SliderControl {
+                        titulo: "⏩ Velocidad Simulación"
+                        valorInicial: 0.5; maximo: 2.0
+                        onValorCambiado: (val) => { if(backend) backend.cambiar_velocidad(val) }
+                    }
+                    
+                    SliderControl {
+                        titulo: "Tasa de Contagio (β)"
+                        valorInicial: backend ? backend.config.beta : 0.5; maximo: 1.0
+                        onValorCambiado: (val) => { if(backend) backend.config.beta = val }
+                    }
+
+                    SliderControl {
+                        titulo: "Recuperación (γ)"
+                        valorInicial: backend ? backend.config.gamma : 0.1; maximo: 0.5
+                        onValorCambiado: (val) => { if(backend) backend.config.gamma = val }
+                    }
+
+                    SliderControl {
+                        titulo: "Mortalidad (μ)"
+                        valorInicial: backend ? backend.config.mu : 0.01; maximo: 0.1
+                        onValorCambiado: (val) => { if(backend) backend.config.mu = val }
+                    }
+
+                    SliderControl {
+                        titulo: "Prob. Frontera"
+                        valorInicial: backend ? backend.config.p_frontera : 1.0; maximo: 1.0
+                        onValorCambiado: (val) => { if(backend) backend.config.p_frontera = val }
+                    }
+
+                    Item { Layout.fillHeight: true; height: 20 }
+
+                    Button {
+                        Layout.fillWidth: true; height: 50
+                        background: Rectangle { color: "#e74c3c"; radius: 8 }
+                        contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        onClicked: {
+                            if(backend) backend.reiniciar_simulacion()
+                            // Nos quedamos aquí para ver el cambio
+                        }
+                    }
+
+                    Button {
+                        Layout.fillWidth: true; flat: true
+                        contentItem: Text { text: "⬅ Volver al Menú"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
+                        onClicked: rootDrawer.vistaActual = 0
+                    }
+                }
+            }
+
+            // -----------------------------------------------------
+            // ÍNDICE 3: ESTADÍSTICAS
+            // -----------------------------------------------------
+            ColumnLayout {
+                Text { text: "Estadísticas"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+                
+                Item { Layout.fillHeight: true; height: 20 }
+
+                // BOTÓN: VER CURVA HISTÓRICA
+                Button {
+                    Layout.fillWidth: true; height: 60
+                    background: Rectangle { 
+                        color: "#2ecc71" 
+                        radius: 8 
+                    }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "📈"; font.pixelSize: 24 }
+                        Text { text: "Ver Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                    }
+                    
+                    onClicked: {
+                        if(backend) backend.pausar_simulacion()
+                        
+                        // Cambiamos la vista principal en main.qml
+                        mainWindow.vistaActual = "grafico"
+                        
+                        // Cerramos el menú
+                        rootDrawer.close()
+                    }
+                }
+
+                Text { 
+                    text: "El mapa se cerrará temporalmente\npara optimizar el rendimiento." 
+                    color: "#7f8c8d"; font.italic: true; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
+                }
+                
+                Item { Layout.fillHeight: true }
+                
+                Button {
+                    Layout.fillWidth: true; flat: true
+                    contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: rootDrawer.vistaActual = 0
                 }
             }
         }
     }
 
+    // COMPONENTE SLIDER REUTILIZABLE
     component SliderControl : ColumnLayout {
         property string titulo: ""
         property real valorInicial: 0
@@ -1776,7 +1967,7 @@ Drawer {
             id: slider
             Layout.fillWidth: true
             from: 0.0; to: maximo; value: valorInicial; stepSize: 0.001
-            onPressedChanged: { if (!pressed) parent.valorCambiado(value) }
+            onMoved: parent.valorCambiado(value) // Actualización en tiempo real
         }
     }
 }

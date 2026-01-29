@@ -13,15 +13,34 @@ class SIR:
         self._mascara_vuelos = self.df["vuelo"].astype(str).str.lower().str.contains(filtro)
         self._mascara_puertos = self.df["puerto"].astype(str).str.lower().str.contains(filtro)
 
+
+
     def infectar_primera_vez(self):
         infectados_iniciales = self.opt.INFECTADOS_INICIALES
-        paciente_cero_index = self.opt.INDEX_PAIS_A_INFECTAR
         
+        # --- CAMBIO: BÚSQUEDA POR NOMBRE ---
+        nombre_objetivo = self.opt.PAIS_INICIO
+        
+        # Buscamos el índice en el mapa (O(1) - Muy rápido)
+        paciente_cero_index = self.mapa_mundo.get(nombre_objetivo)
+        
+        # Blindaje: Si escribiste mal el nombre, usamos el primer país disponible
+        if paciente_cero_index is None:
+            print(f"⚠️ ERROR CRÍTICO: No encuentro el país '{nombre_objetivo}' en la base de datos.")
+            print("➡️ Usando el primer país de la lista como fallback.")
+            paciente_cero_index = self.df.index[0]
+            # Opcional: Actualizar el nombre en opciones para que la UI lo sepa
+            self.opt.PAIS_INICIO = self.df.at[paciente_cero_index, "Country Name"]
+        
+        # El resto sigue igual...
         poblacion_pais = self.df.loc[paciente_cero_index, "poblacion"]
         infectados_reales = min(infectados_iniciales, poblacion_pais)
         
         self.df.loc[paciente_cero_index,"S"] -= infectados_reales
         self.df.loc[paciente_cero_index,"I"] += infectados_reales
+        
+
+
 
     def actualizar_cooldowns(self):
         """Resta 1 día al contador de espera de todos los países"""
