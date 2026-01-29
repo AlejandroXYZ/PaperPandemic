@@ -100,37 +100,16 @@ class Engine():
                     "M": int(self.dataframe["M"].sum())
                 }
             }
-
-        # =================================================================
-        # 4. EXPANSIÓN (Vecinos y Viajes)
-        # =================================================================
-        if self.primer_pais:
-            idx_zona_cero = self.opt.INDEX_PAIS_A_INFECTAR
-            if idx_zona_cero in self.dataframe.index:
-                if self.dataframe.at[idx_zona_cero, "I"] > self.opt.UMBRAL_INFECCION_EXTERNO:
-                    vecinos = self.indices_vecinos_zona_cero
-                    if len(vecinos) > 0:
-                        dados = np.random.random(len(vecinos))
-                        vecinos_a_infectar = vecinos[dados < self.opt.p_frontera]
-                        self.sir.infectar_multiples(vecinos_a_infectar)
-
-        # Lógica Vuelos
+            
+        self.sir.procesar_fronteras_inteligente()
+        self.sir.actualizar_cooldowns()
+                
         if "vuelo" in self.dataframe.columns:
-            victimas, amenazas = self.sir.buscar_vuelos_y_puertos("vuelo")
-            if amenazas > 0 and len(victimas) > 0:
-                riesgo = min(self.opt.PROBABILIDAD_INFECTAR_VUELO * (1 + (amenazas * 0.1)), 0.5)
-                victimas = np.array(victimas)
-                mask = np.random.random(len(victimas)) < riesgo
-                self.sir.infectar_multiples(victimas[mask])
-
-        # Lógica Puertos
+            self.sir.procesar_logistica(tipo_transporte="vuelo")
+        
         if "puerto" in self.dataframe.columns:
-            victimas, amenazas = self.sir.buscar_vuelos_y_puertos("puerto")
-            if amenazas > 0 and len(victimas) > 0:
-                riesgo = min(self.opt.PROBABILIDAD_INFECTAR_PUERTO * (1 + (amenazas * 0.05)), 0.3)
-                victimas = np.array(victimas)
-                mask = np.random.random(len(victimas)) < riesgo
-                self.sir.infectar_multiples(victimas[mask])
+            self.sir.procesar_logistica(tipo_transporte="puerto")
+
 
         # =================================================================
         # 5. MATEMÁTICAS SIRD (Pasando el día actual para la regla del día 15)
