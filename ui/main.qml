@@ -68,7 +68,11 @@ ApplicationWindow {
         Loader {
             id: mainLoader
             anchors.fill: parent
-            sourceComponent: mainWindow.vistaActual === "mapa" ? compMapa : compGrafico
+            sourceComponent: {
+                        if (mainWindow.vistaActual === "grafico") return compGrafico;
+                        if (mainWindow.vistaActual === "ranking") return compRanking; // NUEVO
+                        return compMapa;
+            }
         }
     }
 
@@ -91,6 +95,14 @@ ApplicationWindow {
             onVolverClicked: {
                 mainWindow.vistaActual = "mapa"
             }
+        }
+    }
+
+    Component {
+        id: compRanking
+        VistaRanking {
+            anchors.fill: parent
+            onVolverClicked: mainWindow.vistaActual = "mapa"
         }
     }
 }

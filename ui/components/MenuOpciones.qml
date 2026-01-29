@@ -161,6 +161,25 @@ Drawer {
                 
                 Item { Layout.fillHeight: true; height: 20 }
 
+                Button {
+                    Layout.fillWidth: true; height: 60
+                    background: Rectangle { 
+                        color: "#e67e22" // Naranja (Diferente al verde de la gráfica)
+                        radius: 8 
+                    }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "🏆"; font.pixelSize: 24 }
+                        Text { text: "Ranking de Países"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                    }
+                    
+                    onClicked: {
+                        if(backend) backend.pausar_simulacion()
+                        mainWindow.vistaActual = "ranking" // Cambiamos a la nueva vista
+                        rootDrawer.close()
+                    }
+                }
+
                 // BOTÓN: VER CURVA HISTÓRICA
                 Button {
                     Layout.fillWidth: true; height: 60
