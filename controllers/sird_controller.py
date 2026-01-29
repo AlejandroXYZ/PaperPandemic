@@ -242,42 +242,47 @@ class ControladorSIRD(QObject):
             print(f"Error extrayendo historial: {e}")
             return []
 
-    @Slot(result=list)
-    def obtener_ranking_global(self):
+    @Slot(str, result=list)
+    def obtener_ranking_global(self, criterio="I"):
         """
-        Devuelve una lista de diccionarios ordenada por % de infección.
-        Formato: [{'nombre': 'China', 'poblacion': 100, 'infectados': 50, 'pct': 0.5}, ...]
+        Devuelve el ranking ordenado según el criterio:
+        'I': Infectados, 'M': Muertos, 'R': Recuperados, 'S': Sanos
         """
         if not hasattr(self.motor, 'dataframe'): return []
         
         df = self.motor.dataframe.copy()
         
-        # Calcular porcentaje real (Infectados + Muertos + Recuperados vs Población Total)
-        # Ojo: El usuario pidió "% infectados vs sanos", pero lo estándar es "% infectados vs población total"
-        # Usaremos (Infectados / Población) para la barra de peligro.
-        
         # Evitar división por cero
         df["poblacion"] = df["poblacion"].replace(0, 1)
         
-        # Calculamos el ratio. Usamos solo Infectados Activos (I) o Acumulados? 
-        # Para un ranking de "Afectados", solemos usar (I + M). 
-        # Pero para "Peligro actual", usamos I. Vamos con I para ver la barra roja.
-        df["ratio"] = df["I"] / df["poblacion"]
+        # Seleccionamos la columna clave para ordenar
+        col_sort = "I"
+        if criterio == "M": col_sort = "M"
+        elif criterio == "R": col_sort = "R"
+        elif criterio == "S": col_sort = "S"
         
-        # Ordenamos de mayor a menor ratio
-        df_sorted = df.sort_values(by="ratio", ascending=False)
+        # Calculamos el ratio específico para la barra de progreso
+        df["ratio"] = df[col_sort] / df["poblacion"]
         
-        # Extraemos los datos necesarios (Top 200 - o todos, Pandas es rápido)
+        # Ordenamos de Mayor a Menor
+        df_sorted = df.sort_values(by=col_sort, ascending=False)
+        
+        # Extraemos Top 200
         resultado = []
         for index, row in df_sorted.iterrows():
-            if row["I"] > 0 or row["M"] > 0: # Solo mostramos países con algo de acción
-                resultado.append({
-                    "nombre": str(row["Country Name"]),
-                    "codigo": str(row.get("Country Code", "???")),
-                    "poblacion": int(row["poblacion"]),
-                    "infectados": int(row["I"]),
-                    "muertos": int(row["M"]),
-                    "ratio": float(row["ratio"]) # 0.0 a 1.0
-                })
+            # Filtro visual: Si el valor es 0, quizás no queramos mostrarlo (opcional)
+            # Pero para Sanos siempre habrá, así que lo dejamos pasar.
+            
+            resultado.append({
+                "nombre": str(row["Country Name"]),
+                "codigo": str(row.get("Country Code", "???")),
+                "poblacion": int(row["poblacion"]),
+                "valor": int(row[col_sort]), # El valor principal (ej. Muertos)
+                "ratio": float(row["ratio"]), # Para la barra (0.0 a 1.0)
+                "infectados": int(row["I"]),    # Datos extra por si acaso
+                "muertos": int(row["M"]),
+                "recuperados": int(row["R"]),
+                "sanos": int(row["S"])
+            })
                 
         return resultado
