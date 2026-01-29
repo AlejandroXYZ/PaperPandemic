@@ -7,36 +7,50 @@ class Engine():
     def __init__(self, opciones_instancia):
         self.opt = opciones_instancia    
         self.csv = Loader(self.opt)
-        
+                    
         # Intentar crear/conectar DB
+        # self.db devuelve True si es NUEVA, False si ya EXISTÍA
         self.db = self.csv.crear_db()
-        
-        # --- NUEVO: CONTADOR DE DÍAS INTERNO ---
         self.dia_simulacion = 1 
-        
+                    
+        # --- LÓGICA DE CARGA SEGURA ---
         if self.db:            
-            self.primer_pais = None
+            # CASO A: Partida Nueva (Acabas de borrar la DB o es la primera vez)
             self.dataframe = self.csv.cargar_df()
+                        
+            # --- FIX: CREAR HISTORIAL VACÍO ---
+            # Antes faltaba esta línea, por eso fallaba al decir 'object has no attribute historial'
+            self.historial = self.csv.historial() 
+                        
+            self.primer_pais = None 
         else:
+        # CASO B: Cargar Partida Existente (Guinea sigue viva aquí)
             self.dataframe = self.csv.cargar_db()
             self.historial = self.csv.historial()
-            
-            # Si cargamos partida, intentamos recuperar el día donde nos quedamos
+                        
+            # Recuperar día guardado
             if not self.historial.empty:
-                try:
-                    self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
-                except:
-                    self.dia_simulacion = 1
-
-            if not self.historial.empty and "Primer_pais" in self.historial.columns:
-                self.primer_pais = self.historial["Primer_pais"].iloc[0]
+                try: self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
+                except: self.dia_simulacion = 1
+                    
+        # --- LÓGICA DE NOMBRE (Ahora ya es seguro ejecutar esto) ---
+        # 1. Si hay historial (partida cargada), respetamos el país original
+        if not self.historial.empty and "Primer_pais" in self.historial.columns:
+            val = self.historial["Primer_pais"].iloc[0]
+            self.primer_pais = val if val else "Desconocido"
+        else:
+            # 2. Si NO hay historial (partida nueva), usamos tu configuración de options.py
+            pais_idx = self.opt.INDEX_PAIS_A_INFECTAR
+            if pais_idx in self.dataframe.index:
+                self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
             else:
                 self.primer_pais = "Desconocido"
-
+            
+        # Cargar mapa y modelo...
         self.mapa = self.csv.cargar_mapa(self.dataframe)
         self.sir = SIR(mapa_mundo=self.mapa, df=self.dataframe, opt=self.opt)
-        
-        # Precarga de vecinos del paciente cero (Optimización)
+                    
+        # Precarga de vecinos (igual que antes)
         if self.primer_pais and self.primer_pais != "Desconocido":
             vecinos = self.sir.buscar_vecinos(self.primer_pais)
             self.indices_vecinos_zona_cero = np.array(vecinos) if vecinos else np.array([])

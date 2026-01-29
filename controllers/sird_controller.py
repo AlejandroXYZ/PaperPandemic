@@ -26,6 +26,7 @@ class ControladorSIRD(QObject):
         self._recuperados = 0
         self._muertos = 0
         self._paisesInfectados = 0
+        self._primerPais = "Esperando..."
         self._noticia = "Preparado. Pulsa Play."
         
         self.timer = QTimer()
@@ -56,6 +57,9 @@ class ControladorSIRD(QObject):
     # Este puede quedarse en int porque nunca habrá más de 200 países
     @Property(int, notify=statsChanged)
     def paisesInfectados(self): return self._paisesInfectados
+
+    @Property(str, notify=statsChanged)
+    def primerPais(self): return self._primerPais
 
     @Property(str, notify=diaChanged)
     def dia(self): return str(self._dia)
@@ -148,6 +152,22 @@ class ControladorSIRD(QObject):
         if hasattr(self.motor, 'dataframe'):
              # Construimos un 'resultado' falso solo para actualizar la UI
              df = self.motor.dataframe
+             nombre = getattr(self.motor, 'primer_pais', "Desconocido")
+
+             
+             if not nombre or nombre == "Desconocido":
+                 # INTENTO DE RESCATE: Si el motor no sabe, miramos si alguien tiene infectados
+                 infectados = df[df["I"] > 0]
+                 if not infectados.empty:
+                     nombre = infectados.iloc[0]["Country Name"]
+                 else:
+                     # Si nadie está infectado aún (Día 0), predecimos quién será
+                     idx_target = self.opciones.INDEX_PAIS_A_INFECTAR
+                     if idx_target in df.index:
+                         nombre = df.loc[idx_target, "Country Name"]
+                         
+             self._primerPais = str(nombre) if nombre else "Desconocido"
+             
              totales = {
                  "S": int(df["S"].sum()),
                  "I": int(df["I"].sum()),

@@ -1,2 +1,7 @@
 __pycache__
 pip
+venv
+crear_contexto.py
+contexto_proyecto.txt
+todolist.txt
+mundo.db

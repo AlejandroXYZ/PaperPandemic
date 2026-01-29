@@ -18,6 +18,7 @@ ToolBar {
     property real infectados: 1
     property real recuperados: 0
     property real muertos: 0
+    property string primerPaisNombre: "..."
 
     // ========================================================
     // COMPONENTE DATO CORREGIDO (Sin conflictos de anclaje)
@@ -119,6 +120,12 @@ ToolBar {
                 valor: root.paisesInfectados + "/250"; 
                 colorAcento: "#ffb74d" 
                 tooltipText: "Países con al menos un infectado"
+            }
+            DatoSird { 
+                icono: "☣️ Origen:"; 
+                valor: root.primerPaisNombre; 
+                colorAcento: "#ff5252" // Rojo alerta
+                tooltipText: "País Paciente Cero"
             }
         }
 

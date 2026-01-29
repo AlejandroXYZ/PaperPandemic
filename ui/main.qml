@@ -32,6 +32,7 @@ header: BarraSuperior {
         id: barraInf
         
         dia: backend ? backend.dia : "1"
+        primerPaisNombre: backend ? backend.primerPais : "..."
         sanos: backend ? backend.sanos : 0
         infectados: backend ? backend.infectados : 0
         recuperados: backend ? backend.recuperados : 0
