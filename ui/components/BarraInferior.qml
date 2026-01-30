@@ -133,38 +133,70 @@ ToolBar {
 
         // --- SECCIÓN DE NOTICIAS ---
         Rectangle {
-            Layout.preferredWidth: 350
-            Layout.preferredHeight: 40
-            Layout.alignment: Qt.AlignVCenter
-            color: "#2f3542"
-            radius: 5
-            border.color: "#747d8c"
-            clip: true 
-
-            RowLayout {
+            id: newsContainer
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+                
+            // MÁRGENES: Para que el borde no toque los extremos de la pantalla
+            Layout.topMargin: 10
+            Layout.bottomMargin: 10
+            Layout.rightMargin: 20 
+                
+            color: "#15ffffff" // Fondo blanco muy transparente (efecto cristal)
+                
+            // --- EL BORDE QUE PEDISTE ---
+            border.color: "white"
+            border.width: 1
+            radius: 6 // Esquinas redondeadas para que se vea moderno
+                
+            clip: true // IMPORTANTE: Corta el texto que se sale
+    
+            Text {
+                id: tickerText
+                text: backend ? backend.noticia : "Esperando datos..."
+                color: "#e0e0e0"
+                font.pixelSize: 16
+                font.bold: true
+                font.family: "Courier New" 
+                verticalAlignment: Text.AlignVCenter
+                    
+                x: parent.width 
+                anchors.verticalCenter: parent.verticalCenter
+    
+                NumberAnimation on x {
+                    from: parent.width 
+                    to: -tickerText.width 
+                    duration: 8000 
+                    loops: Animation.Infinite
+                    running: true
+                }
+                    
+                onTextChanged: {
+                    // Reinicio de animación
+                }
+            }
+    
+            // AREA CLICKEABLE CON EFECTO VISUAL
+            MouseArea {
+                id: newsMouse
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 10
-
-                Rectangle {
-                    Layout.preferredWidth: 80
-                    Layout.preferredHeight: 20
-                    color: "#ff3f34"
-                    radius: 3
-                    Text { 
-                        anchors.centerIn: parent; text: "NOTICIA"; 
-                        color: "white"; font.pixelSize: 10; font.bold: true 
-                    }
+                cursorShape: Qt.PointingHandCursor
+                hoverEnabled: true // Para detectar cuando pasas el mouse
+                    
+                onClicked: {
+                    if(backend) backend.pausar_simulacion()
+                    mainWindow.vistaActual = "noticias"
                 }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.noticiaActual
-                    color: "white"
-                    font.pixelSize: 13
-                    font.italic: true
-                    elide: Text.ElideRight 
-                }
+            }
+                
+            // EFECTO EXTRA: Iluminar el borde cuando pasas el mouse
+            states: State {
+                name: "hovered"
+                when: newsMouse.containsMouse
+                PropertyChanges { target: newsContainer; border.color: "#00cec9"; color: "#25ffffff" }
+            }
+            transitions: Transition {
+                ColorAnimation { duration: 200 }
             }
         }
     }

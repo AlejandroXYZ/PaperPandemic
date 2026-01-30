@@ -71,7 +71,8 @@ ApplicationWindow {
             anchors.fill: parent
             sourceComponent: {
                         if (mainWindow.vistaActual === "grafico") return compGrafico;
-                        if (mainWindow.vistaActual === "ranking") return compRanking; // NUEVO
+                        if (mainWindow.vistaActual === "ranking") return compRanking;
+                        if (mainWindow.vistaActual === "noticias") return compNoticias;
                         return compMapa;
             }
         }
@@ -105,6 +106,11 @@ ApplicationWindow {
             anchors.fill: parent
             onVolverClicked: mainWindow.vistaActual = "mapa"
         }
+    }
+
+    Component {
+            id: compNoticias
+            VistaNoticias { anchors.fill: parent }
     }
 
     // ... (después de Component id: compRanking) ...

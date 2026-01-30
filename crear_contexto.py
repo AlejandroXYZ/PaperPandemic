@@ -13,7 +13,13 @@ archivos_clave = [
     "ui/components/Mapa.qml",
     "ui/components/BarraInferior.qml",
     "ui/components/BarraSuperior.qml",
-    "ui/components/MenuOpciones.qml"
+    "ui/components/MenuOpciones.qml",
+    "ui/components/PieChartPopup.qml",
+    "ui/components/GameOverModal.qml",
+    "ui/components/VistaGrafica.qml",
+    "ui/components/VistaNoticias.qml",
+    "ui/components/VistaRanking.qml"
+
 ]
 
 output_file = "contexto_proyecto.txt"

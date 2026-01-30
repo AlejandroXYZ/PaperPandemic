@@ -19,6 +19,8 @@ class Options(QObject):
     INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
     UMBRAL_INFECCION_EXTERNO = 500
     UMBRAL_ERRADICACION = 10
+    NOMBRE_VIRUS = "Paper-20" # ¡Cámbialo por el que quieras!
+    MAX_NOTICIAS_HISTORIAL = 50 # Límite para no llenar la RAM
 
     # El porcentaje de población infectada necesario para que salgan aviones/barcos (0.4 = 40%)
     UMBRAL_PCT_TRANSPORTE = 0.40 

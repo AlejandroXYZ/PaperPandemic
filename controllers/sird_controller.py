@@ -2,6 +2,8 @@ from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer
 from backend.engine import Engine
 from controllers.mapa_modelo import MapaModeloSIRD
 from backend.options import Options
+from collections import deque
+import random
 
 class ControladorSIRD(QObject):
     # Señales
@@ -9,7 +11,8 @@ class ControladorSIRD(QObject):
     noticiaCambio = Signal(str)
     statsChanged = Signal() 
     diaChanged = Signal(str)
-    gameOver = Signal('QVariantMap') 
+    gameOver = Signal('QVariantMap')
+    noticiasActualizadas = Signal() 
 
 
     def __init__(self):
@@ -38,6 +41,15 @@ class ControladorSIRD(QObject):
         # 3. ¡IMPORTANTE! Cargar datos iniciales (para no ver ceros)
         # Ejecutamos una actualización manual sin avanzar el tiempo
         self.actualizar_interfaz_desde_motor()
+
+        self.noticias_data = deque(maxlen=self.opciones.MAX_NOTICIAS_HISTORIAL)
+        
+        # MEMORIA 1: Países infectados (Se borra y actualiza cada tick)
+        self.paises_infectados_set = set() 
+        
+        # [cite_start]MEMORIA 2: Hitos/Logros (NUEVO - Esto persiste para siempre) [cite: 98]
+        self.hitos_reportados = set()
+        
 
     @Property(QObject, constant=True)
     def config(self):
@@ -136,6 +148,10 @@ class ControladorSIRD(QObject):
         self.mapa_modelo._inicializar_vacio()
         self.motor = Engine(self.opciones) # Motor nuevo con opciones
 
+        self.paises_infectados_set = set()
+        self.hitos_reportados = set()      # <--- AÑADIR ESTO [cite: 109, 110]
+        self.noticias_data.clear()
+
         self._noticia = "Simulación Reiniciada."
         
         # Cargar estado inicial limpio
@@ -188,39 +204,94 @@ class ControladorSIRD(QObject):
 
     def procesar_resultado(self, resultado):
         status = resultado.get("status", "Jugando")
-        
         datos = resultado.get("datos", [])
+                
+        # --- LÓGICA DE NOTICIAS BLINDADA ---
+        try:
+            df = self.motor.dataframe
+            virus = getattr(self.opciones, "NOMBRE_VIRUS", "Virus-X") 
+            
+            # 1. DETECTAR NUEVOS PAÍSES INFECTADOS
+            infectados_ahora = set(df[df["I"] > 0]["Country Name"].tolist())
+            nuevos = infectados_ahora - self.paises_infectados_set
+            
+            for pais_nombre in nuevos:
+                culpable = "Desconocido"
+                        
+                # Solo buscamos culpable si YA había infectados antes
+                # Y usamos la lista LIMPIA (solo países reales)
+                if len(self.paises_infectados_set) > 0:
+                    lista_previos = list(self.paises_infectados_set)
+                    if lista_previos:
+                        culpable = random.choice(lista_previos)
+                        frases = [
+                            f"¡{virus} llegó a {pais_nombre} desde {culpable}!",
+                            f"Frontera rota: {culpable} contagió a {pais_nombre}.",
+                            f"Turistas de {culpable} llevan el virus a {pais_nombre}.",
+                            f"Detectado caso en {pais_nombre}. Origen: {culpable}."
+                        ]
+                        msg = random.choice(frases)
+                    else:
+                            msg = f"¡{virus} aparece en {pais_nombre}!"
+                else:
+                    msg = f"☣️ ¡PACIENTE CERO detectado en {pais_nombre}!"
+            
+                self.generar_noticia(msg, "INFECT")
+            
+            # Actualizamos la lista de países (Esto borraba el 1M_INF antes)
+            self.paises_infectados_set = infectados_ahora
+                    
+            # 2. HITOS GLOBALES (Usamos la NUEVA memoria separada)
+            # Hito: 1 Millón
+            if self._infectados > 1000000 and "1M_INF" not in self.hitos_reportados:
+                self.generar_noticia(f"¡El mundo supera 1 Millón de infectados!", "INFO")
+                self.hitos_reportados.add("1M_INF") # Guardamos en la memoria segura
+            
+            # Hito: 100 Millones
+            if self._infectados > 100000000 and "100M_INF" not in self.hitos_reportados:
+                self.generar_noticia(f"¡CATASTROFE: 100 Millones de infectados!", "DEATH")
+                self.hitos_reportados.add("100M_INF")
+            
+            # Hito: 50% Población Mundial (aprox 4 billones)
+            if self._infectados > 4000000000 and "HALF_WORLD" not in self.hitos_reportados:
+                self.generar_noticia(f"¡La mitad de la humanidad ha contraído {virus}!", "DEATH")
+                self.hitos_reportados.add("HALF_WORLD")
+            
+        except Exception as e:
+            print(f"⚠️ Error generando noticia: {e}")
+                    
+                        
+        # --- FIN LÓGICA NOTICIAS ---
+                
         if datos: self.mapa_modelo.actualizar_datos(datos)
-
+                
         totales = resultado.get("totales", {})
         if totales:
             self._sanos = int(totales.get("S", 0))
             self._infectados = int(totales.get("I", 0))
             self._recuperados = int(totales.get("R", 0))
             self._muertos = int(totales.get("M", 0))
+                
+            self._dia = str(resultado.get("dia", self._dia))
+            self._paisesInfectados = sum(1 for p in datos if p.get("I", 0) > 0)
+                
+            self.statsChanged.emit()
+            self.diaChanged.emit(self._dia)
+                
+            if status != "PLAYING" and status != "Jugando":
+                self.pausar_simulacion()
+                self._noticia = f"🏁 FIN: {status}"
+                self.noticiaCambio.emit(self._noticia)
+                            
+                self.gameOver.emit({
+                    "titulo": status,
+                    "dia": self._dia,
+                    "sanos": float(self._sanos),
+                    "recuperados": float(self._recuperados),
+                    "muertos": float(self._muertos),
+                    "paises_afectados": int(self._paisesInfectados)
+                })
 
-        self._dia = str(resultado.get("dia", self._dia))
-        self._paisesInfectados = sum(1 for p in datos if p.get("I", 0) > 0)
-
-        self.statsChanged.emit()
-        self.diaChanged.emit(self._dia)
-
-        if status != "PLAYING" and status != "Jugando":
-            self.pausar_simulacion()
-            self._noticia = f"🏁 FIN: {status}"
-            self.noticiaCambio.emit(self._noticia)
-
-            # EMITIR SEÑAL PARA EL POPUP CON TODOS LOS DATOS
-            self.gameOver.emit({
-                "titulo": status,
-                "dia": self._dia,
-                "sanos": self._sanos,
-                "recuperados": self._recuperados,
-                "muertos": self._muertos,
-                "paises_afectados": self._paisesInfectados
-            })
-
-    
 
     @Slot(result=list)
     def obtener_datos_historial(self):
@@ -347,3 +418,27 @@ class ControladorSIRD(QObject):
         # Así no tienes que esperar al Timer ni darle a Play
         resultado = self.motor.avanzar_dia()
         self.procesar_resultado(resultado)
+
+
+    @Slot(result=list)
+    def obtener_historial_noticias(self):
+        # Convertimos el deque a lista para que QML lo entienda
+        return list(self.noticias_data)
+
+    def generar_noticia(self, mensaje, tipo="INFO"):
+        """
+        Tipos: 'INFECT' (Rojo), 'DEATH' (Negro), 'CURE' (Azul), 'INFO' (Gris)
+        """
+        item = {
+            "dia": self._dia,
+            "mensaje": mensaje,
+            "tipo": tipo
+        }
+        # Añadimos al principio (Noticia más reciente arriba)
+        self.noticias_data.appendleft(item)
+
+        # Enviamos solo el texto al ticker (barra inferior)
+        self._noticia = mensaje
+        self.noticiaCambio.emit(mensaje)
+        # Avisamos a la lista completa
+        self.noticiasActualizadas.emit()
