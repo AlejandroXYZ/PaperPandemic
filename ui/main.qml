@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import components
+import themes
 
 ApplicationWindow {
     id: mainWindow
@@ -8,7 +9,11 @@ ApplicationWindow {
     width: 1200
     height: 720
     title: "Simulador SIRD - Dashboard"
-    color: "#121212"
+    color: theme.appBackground
+
+    ThemeManager {
+            id: theme
+    }
     
 
     // Propiedad de estado: controla si vemos el "mapa" o el "grafico"
@@ -51,6 +56,7 @@ ApplicationWindow {
         id: opcionesDrawer
         y: header.height
         height: parent.height - header.height - footer.height
+        themeManager: theme
     }
 
     // 4. CONTENEDOR PRINCIPAL (Loader Dinámico)

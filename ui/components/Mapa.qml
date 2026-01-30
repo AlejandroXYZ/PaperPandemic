@@ -7,6 +7,16 @@ Item {
     anchors.fill: parent
     clip: true
 
+    Rectangle {
+        anchors.fill: mapRoot
+        // Usamos una conexión segura al ThemeManager global
+        // Nota: Accedemos a 'theme' porque es un id global en main.qml
+        color: theme ? theme.mapBackground : "#121212"
+            
+        // Animación suave al cambiar de tema
+        Behavior on color { ColorAnimation { duration: 500 } }
+    }
+
     // =========================================================
     // 1. TOOLTIP (Variables Globales)
     // =========================================================
@@ -120,11 +130,16 @@ Item {
 
                 ShapePath {
                     strokeWidth: 1.0 / mapContainer.scale 
-                    strokeColor: "white"
+                    
+                    // --- CAMBIO AQUÍ ---
+                    strokeColor: theme ? theme.mapStroke : "white" 
+                    // -------------------
+                    
                     fillColor: (model.color_pais && model.color_pais !== "") ? model.color_pais : "#CFD8DC"
                     fillRule: ShapePath.WindingFill
                     PathSvg { path: model.path }
                 }
+                
 
             MouseArea {
                 id: countryMouse

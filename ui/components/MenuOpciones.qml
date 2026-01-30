@@ -15,7 +15,8 @@ Drawer {
     clip: true 
 
     property int vistaActual: 0 
-
+    property var themeManager: null
+    
     onOpened: if(backend) backend.pausar_simulacion()
 
     // --- COMPONENTE DE DIÁLOGO NATIVO ---
@@ -105,6 +106,51 @@ Drawer {
 
                 Text { text: "Configuración"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "🎨 Tema Visual"; color: "#bdc3c7"; font.bold: true }
+                    
+                    ComboBox {
+                        id: comboTema
+                        Layout.fillWidth: true
+                        // Obtenemos la lista del ThemeManager
+                        model: rootDrawer.themeManager ? rootDrawer.themeManager.themeNames : []
+                        
+                        // Seleccionar el actual al inicio
+                        Component.onCompleted: currentIndex = find("Default (Dark)")
+
+                        delegate: ItemDelegate {
+                            width: comboTema.width
+                            contentItem: Text { text: modelData; color: "white"; font.pixelSize: 14 }
+                            background: Rectangle { color: hovered ? "#3a3f55" : "#1e1e2e" }
+                        }
+                        contentItem: Text { 
+                            text: comboTema.displayText; color: "white"; leftPadding: 10; verticalAlignment: Text.AlignVCenter 
+                        }
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: "#555" }
+
+                        onActivated: {
+                            if(rootDrawer.themeManager) {
+                                // 1. Cambiar colores de la UI (QML)
+                                rootDrawer.themeManager.setTheme(currentText)
+                                
+                                // 2. Cambiar lógica de colores del Mapa (Python)
+                                if(backend) {
+                                    var nuevaPaleta = rootDrawer.themeManager.currentGradient
+                                    backend.cambiar_tema_mapa(nuevaPaleta)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+
+
+
                 // 1. NOMBRE VIRUS
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -167,8 +213,22 @@ Drawer {
                 
                 Button {
                     Layout.fillWidth: true; flat: true
-                    contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
-                    onClicked: rootDrawer.vistaActual = 0
+                    contentItem: Text { 
+                        text: "⬅ Volver y Aplicar"; // Cambié el texto para que sea obvio
+                        color: "#ff5252"; 
+                        font.bold: true; 
+                        horizontalAlignment: Text.AlignHCenter 
+                    }
+                    onClicked: {
+                        // 1. REINICIAMOS LA SIMULACIÓN
+                        if(backend) backend.reiniciar_simulacion()
+                        
+                        // 2. VOLVEMOS AL MENÚ PRINCIPAL
+                        rootDrawer.vistaActual = 0
+                        
+                        // Opcional: Cerrar el menú automáticamente
+                        // rootDrawer.close() 
+                    }
                 }
             }
 

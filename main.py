@@ -13,7 +13,15 @@ if __name__ == "__main__":
     os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
     os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "Purple"
 
+
+
+
     app = QGuiApplication(sys.argv)
+
+    app.setOrganizationName("Alejandro Moncada")  
+    app.setOrganizationDomain("paperpandemic.com")
+    app.setApplicationName("PaperPandemic")
+    
     engine = QQmlApplicationEngine()
     
     # Instanciar el Controlador

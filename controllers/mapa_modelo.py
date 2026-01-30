@@ -27,6 +27,15 @@ class MapaModeloSIRD(QAbstractListModel):
             print(f"❌ Error cargando paises.json: {e}")
             self.geometria = {}
 
+
+        self.paleta_actual = [
+            (0.00, 162, 178, 243), # Azul
+            (0.25, 156, 39, 176),  # Morado
+            (0.50, 233, 30, 99),   # Rosa
+            (0.75, 213, 0, 0),     # Rojo
+            (1.00, 100, 0, 0)      # Rojo Oscuro
+        ]
+
         self._inicializar_vacio()
 
     def _inicializar_vacio(self):
@@ -97,24 +106,27 @@ class MapaModeloSIRD(QAbstractListModel):
 
 
     def calcular_color_hex(self, porcentaje):
-        # Gradiente normalizado 0.0 a 1.0
-        stops = [
-            (0.00, 162, 178, 243), # Azul Base
-            (0.25, 156, 39, 176),  # Morado
-            (0.50, 233, 30, 99),   # Rosa
-            (0.75, 213, 0, 0),     # Rojo
-            (1.00, 100, 0, 0)      # Rojo Oscuro
-        ]
+        stops = self.paleta_actual
+                
+        # Algoritmo de interpolación lineal
         for i in range(len(stops) - 1):
             t1, r1, g1, b1 = stops[i]
             t2, r2, g2, b2 = stops[i+1]
+                    
             if porcentaje <= t2:
-                factor = (porcentaje - t1) / (t2 - t1)
+                # Evitar división por cero
+                dist = t2 - t1
+                if dist == 0: return f"#{r1:02x}{g1:02x}{b1:02x}"
+                        
+                factor = (porcentaje - t1) / dist
                 r = int(r1 + (r2 - r1) * factor)
                 g = int(g1 + (g2 - g1) * factor)
                 b = int(b1 + (b2 - b1) * factor)
                 return f"#{r:02x}{g:02x}{b:02x}"
-        return "#640000"
+                
+        # Si supera el 100%, devuelve el último color
+        _, lr, lg, lb = stops[-1]
+        return f"#{lr:02x}{lg:02x}{lb:02x}"
 
     def actualizar_datos(self, lista_paises):
         if not self.paises or not lista_paises: return
@@ -158,3 +170,40 @@ class MapaModeloSIRD(QAbstractListModel):
             top = self.index(idx_min, 0)
             bot = self.index(idx_max, 0)
             self.dataChanged.emit(top, bot, [self.ColorRole, self.InfectadoRole, self.RecuperadoRole])
+
+
+
+    def _hex_to_rgb(self, hex_color):
+        """Convierte '#RRGGBB' a (R, G, B) enteros"""
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+    def actualizar_paleta_colores(self, lista_hex):
+        """Recibe lista de 5 strings Hex desde QML y actualiza el motor"""
+        if len(lista_hex) != 5: return
+            
+        nuevos_stops = []
+        pasos = [0.00, 0.25, 0.50, 0.75, 1.00]
+            
+        for i, hex_code in enumerate(lista_hex):
+            r, g, b = self._hex_to_rgb(hex_code)
+            nuevos_stops.append((pasos[i], r, g, b))
+                
+        self.paleta_actual = nuevos_stops
+            
+        # FORZAMOS RE-PINTADO DE TODOS LOS PAÍSES
+        # Recorremos todos los países y recalculamos su color con la nueva paleta
+        hay_cambios = False
+        for pais in self.paises:
+            # Recalculamos el porcentaje actual
+            pob = pais["poblacion"]
+            infectados = pais["infectado"] + pais["recuperado"] + pais.get("muerto", 0)
+            pct = infectados / pob if pob > 0 else 0
+                
+            nuevo_color = self.calcular_color_hex(pct)
+            pais["color"] = nuevo_color
+            hay_cambios = True
+                
+        if hay_cambios and self.paises:
+            # Emitimos señal de que TODO cambió
+            self.dataChanged.emit(self.index(0,0), self.index(len(self.paises)-1, 0), [self.ColorRole])

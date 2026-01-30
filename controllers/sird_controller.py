@@ -512,3 +512,10 @@ class ControladorSIRD(QObject):
         except Exception as e:
             self.generar_noticia("❌ Error crítico al exportar.", "DEATH")
             print(f"Error exportando: {e}")
+
+
+    @Slot(list)
+    def cambiar_tema_mapa(self, lista_colores):
+        """Recibe ['#RRGGBB', ...] y actualiza el modelo del mapa"""
+        print(f"🎨 Cambiando paleta del mapa: {lista_colores}")
+        self.mapa_modelo.actualizar_paleta_colores(lista_colores)

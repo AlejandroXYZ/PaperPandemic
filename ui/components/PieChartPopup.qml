@@ -23,10 +23,15 @@ Rectangle {
     signal irARankingGlobal()  // NUEVA
     signal irAGraficaHistorica() // NUEVA
 
-    readonly property color cS: "#DCE775"
-    readonly property color cI: "#ff5252"
-    readonly property color cR: "#4fc3f7"
-    readonly property color cM: "#95a5a6"
+    property color cS: theme ? theme.pieS : "#DCE775"
+    property color cI: theme ? theme.pieI : "#ff5252"
+    property color cR: theme ? theme.pieR : "#4fc3f7"
+    property color cM: theme ? theme.pieM : "#95a5a6"
+
+    onCSChanged: pieCanvas.requestPaint()
+    onCIChanged: pieCanvas.requestPaint()
+    onCRChanged: pieCanvas.requestPaint()
+    onCMChanged: pieCanvas.requestPaint()
 
     property int hoveredSlice: -1
     property string tooltipText: ""
