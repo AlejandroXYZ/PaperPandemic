@@ -1,9 +1,12 @@
-from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer
+from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer, QUrl
 from backend.engine import Engine
 from controllers.mapa_modelo import MapaModeloSIRD
 from backend.options import Options
 from collections import deque
 import random
+import os
+import datetime
+import pandas as pd
 
 class ControladorSIRD(QObject):
     # Señales
@@ -79,6 +82,15 @@ class ControladorSIRD(QObject):
 
     @Property(str, notify=noticiaCambio)
     def noticia(self): return self._noticia
+
+    @Property(list, constant=True)
+    def listaNombresPaises(self):
+        """Devuelve la lista alfabética de países para el ComboBox"""
+        if hasattr(self.motor, 'dataframe') and not self.motor.dataframe.empty:
+            # Obtenemos nombres únicos y los ordenamos
+            lista = sorted(self.motor.dataframe["Country Name"].unique().tolist())
+            return lista
+        return ["Cargando..."]
 
 
     @Slot(float)
@@ -442,3 +454,61 @@ class ControladorSIRD(QObject):
         self.noticiaCambio.emit(mensaje)
         # Avisamos a la lista completa
         self.noticiasActualizadas.emit()
+
+
+    @Slot(str)
+    def exportar_datos_excel(self, file_url):
+        """
+        Genera DOS archivos CSV basados en la ruta elegida por el usuario:
+        1. [Nombre]_Estado_Actual.csv (Datos por país)
+        2. [Nombre]_Historial_Global.csv (Datos temporales de la DB)
+        """
+        try:
+            if not hasattr(self.motor, 'dataframe'): return
+            
+            # 1. LIMPIEZA DE RUTA (Cross-Platform)
+            ruta_limpia = QUrl(file_url).toLocalFile()
+            
+            # Separamos nombre y extensión para insertar los sufijos
+            # Ej: "/home/user/Datos.csv" -> base="/home/user/Datos", ext=".csv"
+            base, ext = os.path.splitext(ruta_limpia)
+            if not ext: ext = ".csv" # Por si el usuario no puso extensión
+            
+            # ---------------------------------------------------------
+            # ARCHIVO 1: ESTADO ACTUAL (Tabla de Países)
+            # ---------------------------------------------------------
+            ruta_estado = f"{base}_Estado_Actual{ext}"
+            self.motor.dataframe.to_csv(ruta_estado, index=False, encoding='utf-8-sig')
+            
+            # ---------------------------------------------------------
+            # ARCHIVO 2: HISTORIAL (Tabla de Tiempo)
+            # ---------------------------------------------------------
+            ruta_historial = f"{base}_Historial_Global{ext}"
+            
+            # Intentamos obtener el historial fresco desde la base de datos
+            df_historial = pd.DataFrame()
+            try:
+                # Usamos el método que ya tienes en loader.py
+                df_historial = self.motor.csv.historial()
+            except Exception as e:
+                print(f"⚠️ Error leyendo historial DB: {e}")
+
+            if not df_historial.empty:
+                df_historial.to_csv(ruta_historial, index=False, encoding='utf-8-sig')
+                mensaje_extra = " y Historial"
+            else:
+                mensaje_extra = " (Historial vacío)"
+
+            # ---------------------------------------------------------
+            # NOTIFICACIÓN
+            # ---------------------------------------------------------
+            nombre_base = os.path.basename(base)
+            self.generar_noticia(f"💾 Guardado: {nombre_base}_Estado{ext} y {nombre_base}_Historial{ext}", "INFO")
+            
+            print(f"✅ Exportación exitosa:")
+            print(f"   📄 {ruta_estado}")
+            print(f"   📄 {ruta_historial}")
+            
+        except Exception as e:
+            self.generar_noticia("❌ Error crítico al exportar.", "DEATH")
+            print(f"Error exportando: {e}")

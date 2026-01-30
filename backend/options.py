@@ -3,44 +3,38 @@ import os
 
 class Options(QObject):
     # =========================================================
-    # 1. CONSTANTES DE RUTA (Arreglado para carpeta 'backend')
+    # 1. CONSTANTES DE RUTA
     # =========================================================
-    
-    # Obtenemos la ruta absoluta de la carpeta donde está ESTE archivo (backend/)
     _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-    
-    # Construimos las rutas apuntando a la carpeta 'data' dentro de 'backend'
     RUTA_DB_CREADA = os.path.join(_BACKEND_DIR, "data", "mundo.db")
     RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
 
-    # Constantes fijas del juego
-    PAIS_INICIO = "Venezuela"
+    # Constantes numéricas fijas
     INFECTADOS_INICIALES = 2
-    INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
+    INFECTADOS_INICIALES_VECINOS = 11
     UMBRAL_INFECCION_EXTERNO = 500
     UMBRAL_ERRADICACION = 10
-    NOMBRE_VIRUS = "Paper-20" # ¡Cámbialo por el que quieras!
-    MAX_NOTICIAS_HISTORIAL = 50 # Límite para no llenar la RAM
+    MAX_NOTICIAS_HISTORIAL = 50 
 
-    # El porcentaje de población infectada necesario para que salgan aviones/barcos (0.4 = 40%)
     UMBRAL_PCT_TRANSPORTE = 0.40 
-    # Días de espera antes de poder volver a infectar por este medio
     DIAS_COOLDOWN_TRANSPORTE = 3
-    UMBRAL_PCT_FRONTERA = 0.05   # 20% de infectados para cruzar a pie
-    DIAS_COOLDOWN_FRONTERA = 2   # Espera entre contagios vecinales
+    UMBRAL_PCT_FRONTERA = 0.05   
+    DIAS_COOLDOWN_FRONTERA = 2   
 
     # =========================================================
-    # 2. SEÑALES
+    # 2. SEÑALES (Notifican a QML cuando algo cambia)
     # =========================================================
     betaChanged = Signal(float)
     gammaChanged = Signal(float)
     muChanged = Signal(float)
     pFronteraChanged = Signal(float)
+    
+    # --- NUEVAS SEÑALES ---
+    virusNombreChanged = Signal(str)
+    paisInicioChanged = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        # Debug: Imprimimos la ruta para que verifiques en consola
         print(f"📁 BUSCANDO DATOS EN: {self.RUTA_CSV}")
 
         # =====================================================
@@ -51,11 +45,36 @@ class Options(QObject):
         self._mu = 0.005
         self._p_frontera = 1.0
         
-        # Probabilidades extra
+        # --- NUEVAS VARIABLES EDITABLES ---
+        self._nombre_virus = "Paper-20"
+        self._pais_inicio = "Venezuela"
+
         self.PROBABILIDAD_INFECTAR_VUELO = 1.0
         self.PROBABILIDAD_INFECTAR_PUERTO = 1.0
 
     # --- GETTERS Y SETTERS ---
+    
+    # 1. VIRUS
+    @Property(str, notify=virusNombreChanged)
+    def NOMBRE_VIRUS(self): return self._nombre_virus
+
+    @NOMBRE_VIRUS.setter
+    def NOMBRE_VIRUS(self, val):
+        if self._nombre_virus != val:
+            self._nombre_virus = val
+            self.virusNombreChanged.emit(val)
+
+    # 2. PAÍS INICIO
+    @Property(str, notify=paisInicioChanged)
+    def PAIS_INICIO(self): return self._pais_inicio
+
+    @PAIS_INICIO.setter
+    def PAIS_INICIO(self, val):
+        if self._pais_inicio != val:
+            self._pais_inicio = val
+            self.paisInicioChanged.emit(val)
+
+    # 3. PARÁMETROS MATEMÁTICOS
     @Property(float, notify=betaChanged)
     def beta(self): return self._beta
 

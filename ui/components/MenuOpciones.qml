@@ -1,20 +1,37 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs 6.3 // IMPORTANTE: Para abrir el gestor de archivos nativo
 
 Drawer {
     id: rootDrawer
-    width: 300
+    width: 320 // Aumentamos un poco el ancho para evitar cortes en Linux/Gnome
     modal: false
     dim: false
     closePolicy: Popup.NoAutoClose
     background: Rectangle { color: "#1e1e2e" }
     
-    // Control de navegación interna: 0=Menu, 1=Config, 2=Params, 3=Stats
+    // Propiedad para evitar que los elementos se salgan visualmente
+    clip: true 
+
     property int vistaActual: 0 
 
-    // Al abrir el menú, pausamos para ahorrar recursos
     onOpened: if(backend) backend.pausar_simulacion()
+
+    // --- COMPONENTE DE DIÁLOGO NATIVO ---
+    FileDialog {
+        id: fileDialog
+        title: "Exportar Datos de la Simulación"
+        nameFilters: ["Archivos CSV (*.csv)", "Todos los archivos (*)"]
+        // Por defecto sugiere un nombre, pero deja al usuario cambiarlo y elegir carpeta
+        currentFile: "Reporte_Pandemia_" + Qt.formatDateTime(new Date(), "yyyy-MM-dd") + ".csv"
+        fileMode: FileDialog.SaveFile
+        
+        onAccepted: {
+            // Pasamos la ruta elegida (selectedFile) al backend
+            if(backend) backend.exportar_datos_excel(selectedFile)
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -40,12 +57,19 @@ Drawer {
             currentIndex: rootDrawer.vistaActual
             Layout.fillWidth: true
             Layout.fillHeight: true
+            
+            // FIX DE DESBORDAMIENTO:
+            // Aseguramos que el StackLayout respete los márgenes del padre
+            clip: true 
 
             // -----------------------------------------------------
             // ÍNDICE 0: MENÚ PRINCIPAL
             // -----------------------------------------------------
             ColumnLayout {
                 spacing: 15
+                // Layout.fillWidth asegura que los hijos se estiren al ancho disponible
+                Layout.fillWidth: true 
+
                 Text { text: "Menú Principal"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
                 Button {
@@ -73,16 +97,72 @@ Drawer {
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 1: CONFIGURACIÓN
+            // ÍNDICE 1: CONFIGURACIÓN (Con Exportar Mejorado)
             // -----------------------------------------------------
             ColumnLayout {
+                spacing: 20
+                Layout.fillWidth: true
+
                 Text { text: "Configuración"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
-                Text { 
-                    text: "Próximamente...\nAquí podrás cambiar el idioma,\ntemas de color, etc." 
-                    color: "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
+                // 1. NOMBRE VIRUS
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "🏷️ Nombre del Virus"; color: "#bdc3c7"; font.bold: true }
+                    TextField {
+                        Layout.fillWidth: true
+                        placeholderText: "Ej: Paper-20"
+                        text: backend ? backend.config.NOMBRE_VIRUS : ""
+                        color: "white"
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: parent.activeFocus ? "#00cec9" : "#555" }
+                        onTextEdited: if(backend) backend.config.NOMBRE_VIRUS = text
+                    }
                 }
-                
+
+                // 2. PAÍS INICIO
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "📍 Zona Cero (Origen)"; color: "#bdc3c7"; font.bold: true }
+                    ComboBox {
+                        id: comboPais
+                        Layout.fillWidth: true
+                        model: backend ? backend.listaNombresPaises : []
+                        Component.onCompleted: {
+                            if(backend) {
+                                var idx = find(backend.config.PAIS_INICIO)
+                                if (idx !== -1) currentIndex = idx
+                            }
+                        }
+                        delegate: ItemDelegate {
+                            width: comboPais.width
+                            contentItem: Text { text: modelData; color: "white"; font.pixelSize: 14 }
+                            background: Rectangle { color: hovered ? "#3a3f55" : "#1e1e2e" }
+                        }
+                        contentItem: Text { 
+                            text: comboPais.displayText; color: "white"; leftPadding: 10; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight 
+                        }
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: "#555" }
+                        onActivated: if(backend) backend.config.PAIS_INICIO = currentText
+                    }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+                // 4. EXPORTAR DATOS (AHORA ABRE DIÁLOGO)
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#27ae60"; radius: 8 }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "💾"; font.pixelSize: 20 }
+                        Text { text: "Exportar (.csv)"; color: "white"; font.bold: true }
+                    }
+                    // AQUÍ ESTÁ EL CAMBIO: Abrimos el diálogo, no llamamos al backend directo
+                    onClicked: fileDialog.open()
+                }
+
                 Item { Layout.fillHeight: true }
                 
                 Button {
@@ -93,24 +173,27 @@ Drawer {
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 2: PARÁMETROS (SLIDERS)
+            // ÍNDICE 2: PARÁMETROS
             // -----------------------------------------------------
             ScrollView {
-                clip: true
+                clip: true // Evita que el scroll se salga
+                Layout.fillWidth: true 
+                Layout.fillHeight: true
+
                 ColumnLayout {
-                    width: parent.width
+                    width: parent.width // Forzamos ancho del contenido al del padre
                     spacing: 20
 
                     Text { text: "Ajuste de Variables"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
                     SliderControl {
-                        titulo: "⏩ Velocidad Simulación"
+                        titulo: "⏩ Velocidad"
                         valorInicial: 0.5; maximo: 2.0
                         onValorCambiado: (val) => { if(backend) backend.cambiar_velocidad(val) }
                     }
                     
                     SliderControl {
-                        titulo: "Tasa de Contagio (β)"
+                        titulo: "Tasa Contagio (β)"
                         valorInicial: backend ? backend.config.beta : 0.5; maximo: 1.0
                         onValorCambiado: (val) => { if(backend) backend.config.beta = val }
                     }
@@ -138,16 +221,13 @@ Drawer {
                     Button {
                         Layout.fillWidth: true; height: 50
                         background: Rectangle { color: "#e74c3c"; radius: 8 }
-                        contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        onClicked: {
-                            if(backend) backend.reiniciar_simulacion()
-                            // Nos quedamos aquí para ver el cambio
-                        }
+                        contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 14 }
+                        onClicked: if(backend) backend.reiniciar_simulacion()
                     }
 
                     Button {
                         Layout.fillWidth: true; flat: true
-                        contentItem: Text { text: "⬅ Volver al Menú"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
+                        contentItem: Text { text: "⬅ Volver"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
                         onClicked: rootDrawer.vistaActual = 0
                     }
                 }
@@ -157,54 +237,42 @@ Drawer {
             // ÍNDICE 3: ESTADÍSTICAS
             // -----------------------------------------------------
             ColumnLayout {
+                spacing: 15
+                Layout.fillWidth: true
                 Text { text: "Estadísticas"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
                 Item { Layout.fillHeight: true; height: 20 }
 
                 Button {
                     Layout.fillWidth: true; height: 60
-                    background: Rectangle { 
-                        color: "#e67e22" // Naranja (Diferente al verde de la gráfica)
-                        radius: 8 
-                    }
+                    background: Rectangle { color: "#e67e22"; radius: 8 }
                     contentItem: RowLayout {
                         anchors.centerIn: parent
                         Text { text: "🏆"; font.pixelSize: 24 }
-                        Text { text: "Ranking de Países"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                        Text { text: "Ranking Global"; color: "white"; font.bold: true; font.pixelSize: 16 }
                     }
-                    
                     onClicked: {
                         if(backend) backend.pausar_simulacion()
-                        mainWindow.vistaActual = "ranking" // Cambiamos a la nueva vista
+                        mainWindow.vistaActual = "ranking"
                         rootDrawer.close()
                     }
                 }
 
-                // BOTÓN: VER CURVA HISTÓRICA
                 Button {
                     Layout.fillWidth: true; height: 60
-                    background: Rectangle { 
-                        color: "#2ecc71" 
-                        radius: 8 
-                    }
+                    background: Rectangle { color: "#2ecc71"; radius: 8 }
                     contentItem: RowLayout {
                         anchors.centerIn: parent
                         Text { text: "📈"; font.pixelSize: 24 }
-                        Text { text: "Ver Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                        Text { text: "Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
                     }
-                    
                     onClicked: {
                         if(backend) backend.pausar_simulacion()
-                        
-                        // Cambiamos la vista principal en main.qml
                         mainWindow.vistaActual = "grafico"
-                        
-                        // Cerramos el menú
                         rootDrawer.close()
                     }
                 }
 
-                
                 Item { Layout.fillHeight: true }
                 
                 Button {
@@ -234,7 +302,7 @@ Drawer {
             id: slider
             Layout.fillWidth: true
             from: 0.0; to: maximo; value: valorInicial; stepSize: 0.001
-            onMoved: parent.valorCambiado(value) // Actualización en tiempo real
+            onMoved: parent.valorCambiado(value) 
         }
     }
 }

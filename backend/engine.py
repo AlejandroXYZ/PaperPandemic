@@ -77,19 +77,12 @@ class Engine():
         # Si no hay infectados Y NADIE ha muerto ni se ha recuperado (Inicio virgen)
         if infectados_totales == 0 and historia_pandemia == 0:
             print("☣️ Paciente Cero detectado.")
-            self.sir.infectar_primera_vez()
-            
-            pais_idx = self.opt.PAIS_INICIO
-            if pais_idx in self.dataframe.index:
-                self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
-            else:
-                self.primer_pais = "Desconocido"
-            
-            # Reiniciar día si empezamos de cero
+            self.sir.infectar_primera_vez()                
+            self.primer_pais = self.opt.PAIS_INICIO
+                        
             self.dia_simulacion = 1
             self.db = False 
-            
-            # Recalculamos para que el status no dé "Humanos Ganan" en este mismo tick
+                        
             infectados_totales = self.dataframe["I"].sum()
 
     # =================================================================
