@@ -9,6 +9,7 @@ ApplicationWindow {
     height: 720
     title: "Simulador SIRD - Dashboard"
     color: "#121212"
+    
 
     // Propiedad de estado: controla si vemos el "mapa" o el "grafico"
     property string vistaActual: "mapa"
@@ -103,6 +104,41 @@ ApplicationWindow {
         VistaRanking {
             anchors.fill: parent
             onVolverClicked: mainWindow.vistaActual = "mapa"
+        }
+    }
+
+    // ... (después de Component id: compRanking) ...
+    
+    GameOverModal {
+        id: gameOverPopup
+    
+        onReiniciarClicked: {
+            gameOverPopup.visible = false
+            if(backend) backend.reiniciar()
+        }
+    
+        onVerGraficaClicked: {
+            mainWindow.vistaActual = "grafico"
+        }
+    
+        onVerRankingClicked: {
+            mainWindow.vistaActual = "ranking"
+        }
+    }
+    
+    // CONEXIÓN SEÑAL BACKEND -> MODAL
+    Connections {
+        target: backend
+        function onGameOver(datos) {
+            gameOverPopup.abrir(datos)
+        }
+    }
+
+    Shortcut {
+        sequence: "k"  // La tecla que activa el truco
+        onActivated: {
+            console.log("😈 Tecla K detectada -> Activando Cheat...")
+            if(backend) backend.activar_cheat_fin()
         }
     }
 }

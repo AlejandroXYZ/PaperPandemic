@@ -10,3 +10,4 @@ BarraInferior 1.0 BarraInferior.qml
 VistaGrafica 1.0 VistaGrafica.qml
 VistaRanking 1.0 VistaRanking.qml
 PieChartPopup 1.0 PieChartPopup.qml
+GameOverModal 1.0 GameOverModal.qml

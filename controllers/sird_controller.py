@@ -8,7 +8,8 @@ class ControladorSIRD(QObject):
     datosCambios = Signal()
     noticiaCambio = Signal(str)
     statsChanged = Signal() 
-    diaChanged = Signal(str) 
+    diaChanged = Signal(str)
+    gameOver = Signal('QVariantMap') 
 
 
     def __init__(self):
@@ -119,6 +120,7 @@ class ControladorSIRD(QObject):
     @Slot()
     def reiniciar_simulacion(self):
         self.reiniciar()
+    
 
     @Slot()
     def reiniciar(self):
@@ -161,10 +163,7 @@ class ControladorSIRD(QObject):
                  if not infectados.empty:
                      nombre = infectados.iloc[0]["Country Name"]
                  else:
-                     # Si nadie está infectado aún (Día 0), predecimos quién será
-                     idx_target = self.opciones.INDEX_PAIS_A_INFECTAR
-                     if idx_target in df.index:
-                         nombre = df.loc[idx_target, "Country Name"]
+                     nombre = self.opciones.PAIS_INICIO
                          
              self._primerPais = str(nombre) if nombre else "Desconocido"
              
@@ -210,6 +209,18 @@ class ControladorSIRD(QObject):
             self.pausar_simulacion()
             self._noticia = f"🏁 FIN: {status}"
             self.noticiaCambio.emit(self._noticia)
+
+            # EMITIR SEÑAL PARA EL POPUP CON TODOS LOS DATOS
+            self.gameOver.emit({
+                "titulo": status,
+                "dia": self._dia,
+                "sanos": self._sanos,
+                "recuperados": self._recuperados,
+                "muertos": self._muertos,
+                "paises_afectados": self._paisesInfectados
+            })
+
+    
 
     @Slot(result=list)
     def obtener_datos_historial(self):
@@ -322,3 +333,17 @@ class ControladorSIRD(QObject):
             "pctR": (r/pob)*100,
             "pctM": (m/pob)*100
         }
+
+
+    @Slot()
+    def activar_cheat_fin(self):
+        print("😈 CHEAT ACTIVADO: Apocalipsis instantáneo")
+        self.motor.cheat_fin_rapido()
+        
+        # 1. Actualizamos los números visuales
+        self.actualizar_interfaz_desde_motor()
+        
+        #Forzamos un avance de día MANUAL para que el motor detecte el fin
+        # Así no tienes que esperar al Timer ni darle a Play
+        resultado = self.motor.avanzar_dia()
+        self.procesar_resultado(resultado)

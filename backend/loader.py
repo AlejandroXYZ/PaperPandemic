@@ -41,7 +41,7 @@ class Loader:
         if "poblacion" in df.columns:
             if df["poblacion"].dtype == 'object':
                 df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
-            df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce').fillna(0).astype(int)
+            df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce').fillna(0).astype('int64')
             df = df[df["poblacion"] > 0] # Eliminar países sin gente
         
         if "Country Name" in df.columns:
@@ -50,7 +50,7 @@ class Loader:
         df = self._reparar_columnas(df)
 
         # Inicialización de Modelo
-        df["S"] = df["poblacion"]
+        df["S"] = df["poblacion"].astype("int64")
         df["I"] = 0
         df["R"] = 0
         df["M"] = 0

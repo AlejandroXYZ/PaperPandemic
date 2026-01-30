@@ -11,7 +11,8 @@ class Engine():
         # Intentar crear/conectar DB
         # self.db devuelve True si es NUEVA, False si ya EXISTÍA
         self.db = self.csv.crear_db()
-        self.dia_simulacion = 1 
+        self.dia_simulacion = 1
+        self.dias_consecutivos_cero = 0 
                     
         # --- LÓGICA DE CARGA SEGURA ---
         if self.db:            
@@ -91,19 +92,25 @@ class Engine():
             # Recalculamos para que el status no dé "Humanos Ganan" en este mismo tick
             infectados_totales = self.dataframe["I"].sum()
 
-        # =================================================================
-        # 3. VERIFICAR ESTADO DEL JUEGO
-        # =================================================================
+    # =================================================================
+    # 3. VERIFICAR ESTADO DEL JUEGO
+    # =================================================================
+
         status = "Jugando"
 
-        if poblacion_total == 0:
-            status = "Cargando..."
-        elif sanos_totales <= 0:
-            status = "Virus Gana"
-        elif infectados_totales <= 0 and historia_pandemia > 0:
-            # Solo ganan los humanos si hubo virus alguna vez y se extinguió
-            status = "Humanos Ganan"
+    # Lógica de conteo de días sin virus
+        if infectados_totales == 0 and historia_pandemia > 0:
+            self.dias_consecutivos_cero += 1
+        else:
+            self.dias_consecutivos_cero = 0 # Reiniciar si alguien se infecta
 
+    # CONDICIONES DE VICTORIA/DERROTA
+        if sanos_totales <= 0 and infectados_totales <= 0:
+            status = "Extinción Total" # Todos murieron
+        elif self.dias_consecutivos_cero >= 3:
+            status = "Virus Erradicado" # Fin normal
+
+        
         # Si el juego terminó, devolvemos resultado final inmediatamente
         if status != "Jugando":
             return {
@@ -150,3 +157,54 @@ class Engine():
             },
             "datos": resultado.to_dict(orient="records")
         }
+
+
+
+    def cheat_fin_rapido(self):
+        """
+        Versión BLINDADA contra números negativos.
+        Usa float64 para los cálculos intermedios para evitar el límite de 32 bits.
+        """
+        
+        # 1. Convertimos a NUMPY ARRAYS de tipo FLOAT64 (Decimales de alta precisión)
+        # Esto evita que Pandas intente usar enteros de 32 bits.
+        sanos = self.dataframe["S"].to_numpy(dtype=np.float64)
+        infectados = self.dataframe["I"].to_numpy(dtype=np.float64)
+        recuperados = self.dataframe["R"].to_numpy(dtype=np.float64)
+        muertos = self.dataframe["M"].to_numpy(dtype=np.float64)
+
+        # 2. Generamos aleatoriedad
+        rng = np.random.default_rng()
+        factores_suerte = rng.random(len(sanos)) # Array de 0.0 a 1.0
+        
+        # 3. Cálculo Seguro (Matemática de Flotantes)
+        nuevos_r_float = sanos * factores_suerte
+        nuevos_m_float = sanos - nuevos_r_float
+        
+        # 4. Convertimos a INT64 (Enteros Gigantes) explícitamente
+        # np.floor redondea hacia abajo para evitar decimales sueltos
+        nuevos_r = np.floor(nuevos_r_float).astype(np.int64)
+        nuevos_m = np.floor(nuevos_m_float).astype(np.int64)
+        
+        # Sumamos los infectados a los muertos (convertidos a int64)
+        nuevos_m += infectados.astype(np.int64)
+        
+        # 5. Escribimos de vuelta al DataFrame forzando el tipo
+        self.dataframe["S"] = 0
+        self.dataframe["I"] = 0
+        
+        # Suma final segura
+        total_r = recuperados.astype(np.int64) + nuevos_r
+        total_m = muertos.astype(np.int64) + nuevos_m
+        
+        self.dataframe["R"] = total_r
+        self.dataframe["M"] = total_m
+        
+        # Aseguramos que las columnas en Pandas sean int64
+        self.dataframe["R"] = self.dataframe["R"].astype('int64')
+        self.dataframe["M"] = self.dataframe["M"].astype('int64')
+
+        # Fin del juego
+        self.dias_consecutivos_cero = 5 
+        
+        return self.dataframe
