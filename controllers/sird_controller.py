@@ -286,3 +286,39 @@ class ControladorSIRD(QObject):
             })
                 
         return resultado
+
+    @Slot(str, result='QVariantMap')
+    def obtener_detalle_pais(self, codigo_pais):
+        """
+        Calcula todos los datos necesarios para la gráfica de pastel en Python.
+        Retorna un diccionario listo para QML.
+        """
+        # Buscamos en el modelo de mapa (que ya tiene los datos frescos del último tick)
+        datos = next((p for p in self.mapa_modelo.paises if p["codigo"] == codigo_pais), None)
+        
+        if not datos:
+            return {"existe": False}
+            
+        pob = datos["poblacion"]
+        i = datos["infectado"]
+        r = datos["recuperado"]
+        m = datos.get("muerto", 0) # Asegurar que existe
+        
+        # Matemáticas aquí, no en QML
+        s = pob - i - r - m
+        if s < 0: s = 0 # Corrección de seguridad
+        
+        return {
+            "existe": True,
+            "nombre": datos["nombre"],
+            "poblacion": pob,
+            "valS": s,
+            "valI": i,
+            "valR": r,
+            "valM": m,
+            # Pre-calculamos porcentajes para tooltips (ahorramos JS)
+            "pctS": (s/pob)*100,
+            "pctI": (i/pob)*100,
+            "pctR": (r/pob)*100,
+            "pctM": (m/pob)*100
+        }

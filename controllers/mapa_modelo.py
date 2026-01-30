@@ -9,6 +9,8 @@ class MapaModeloSIRD(QAbstractListModel):
     InfectadoRole = Qt.UserRole + 4
     RecuperadoRole = Qt.UserRole + 5
     ColorRole = Qt.UserRole + 6 
+    MuertoRole = Qt.UserRole + 7
+    PoblacionRole = Qt.UserRole + 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,6 +44,8 @@ class MapaModeloSIRD(QAbstractListModel):
                 "color": "#A2B2F3"
             })
         self.endResetModel()
+        # Esto permite encontrar un país instantáneamente sin buscar en la lista
+        self._indice_rapido = {p["codigo"]: i for i, p in enumerate(self.paises)}
 
     def roleNames(self):
         return {
@@ -50,7 +54,9 @@ class MapaModeloSIRD(QAbstractListModel):
             self.PathRole: b"path",
             self.InfectadoRole: b"infectado",
             self.RecuperadoRole: b"recuperado",
-            self.ColorRole: b"color_pais" 
+            self.ColorRole: b"color_pais",
+            self.MuertoRole: b"muerto",     
+            self.PoblacionRole: b"poblacion"
         }
 
     def rowCount(self, parent=None):
@@ -66,19 +72,29 @@ class MapaModeloSIRD(QAbstractListModel):
         if role == self.InfectadoRole: return pais["infectado"]
         if role == self.RecuperadoRole: return pais["recuperado"]
         if role == self.ColorRole: return pais["color"]
+        if role == self.MuertoRole: return pais.get("muerto", 0) #.get por seguridad
+        if role == self.PoblacionRole: return pais["poblacion"]
         return None
+
 
     @Slot(str, result=str)
     def get_datos_pais_html(self, codigo_pais):
-        for pais in self.paises:
-            if pais["codigo"] == codigo_pais:
-                pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
-                pct = (pais['infectado'] / pob) * 100
-                return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
-                        f"👥 Población: {pob:,}<br>"
-                        f"🤒 Infectados: {pais['infectado']:,} ({pct:.2f}%)<br>"
-                        f"💚 Recuperados: {pais['recuperado']:,}")
+        # OPTIMIZACIÓN O(1): Usamos el diccionario en vez de un bucle for
+        idx = self._indice_rapido.get(codigo_pais)
+        
+        if idx is not None:
+            pais = self.paises[idx]
+            pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
+            pct = (pais['infectado'] / pob) * 100
+            
+            return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
+                    f"👥 Población: {pob:,}<br>"
+                    f"🤒 Infectados: {pais['infectado']:,} ({pct:.2f}%)<br>"
+                    f"💚 Recuperados: {pais['recuperado']:,}")
+        
         return "Sin datos"
+
+
 
     def calcular_color_hex(self, porcentaje):
         # Gradiente normalizado 0.0 a 1.0
@@ -123,6 +139,7 @@ class MapaModeloSIRD(QAbstractListModel):
                 pais["poblacion"] = pob
                 pais["infectado"] = i_val
                 pais["recuperado"] = r_val
+                pais["muerto"] = m_val
                 
                 if "Country Name" in dato:
                     pais["nombre"] = dato["Country Name"]
@@ -140,4 +157,4 @@ class MapaModeloSIRD(QAbstractListModel):
         if hay_cambios:
             top = self.index(idx_min, 0)
             bot = self.index(idx_max, 0)
-            self.dataChanged.emit(top, bot, [self.ColorRole])
+            self.dataChanged.emit(top, bot, [self.ColorRole, self.InfectadoRole, self.RecuperadoRole])

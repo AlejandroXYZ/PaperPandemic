@@ -182,7 +182,7 @@ class Engine():
         
         try:
             self.csv.guardar_estados(resultado, self.primer_pais)
-        except Exceptiona as e:
+        except Exception as e:
             print(e)
              
 
@@ -291,12 +291,15 @@ class SIR:
             # (Optimizacion: self.mapa_mundo es un dict {"Nombre": Indice})
             vecinos_indices = []
             for nombre in lista_vecinos_nombres:
-                idx = self.mapa_mundo.get(nombre)
-                if idx is None:
-                    print(f"⚠️ ALERTA: No encuentro el país vecino '{nombre}' en el mapa.")
+                 # --- FIX: Ignorar si dice "Ninguno" o "No" ---
+                 if "Ninguno" in nombre or nombre == "No": continue
+                 
+                 idx = self.mapa_mundo.get(nombre)
+                 if idx is None:
+                    # print(f"⚠️ ALERTA: No encuentro el país vecino '{nombre}' en el mapa.") # Opcional: comentar el print
                     continue
-                if idx is not None:
-                    vecinos_indices.append(idx)
+                 
+                 vecinos_indices.append(idx)
             
             if not vecinos_indices: continue
 
@@ -695,7 +698,7 @@ class Options(QObject):
     RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
 
     # Constantes fijas del juego
-    PAIS_INICIO = "China"
+    PAIS_INICIO = "Venezuela"
     INFECTADOS_INICIALES = 2
     INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
     UMBRAL_INFECCION_EXTERNO = 500
@@ -998,7 +1001,7 @@ class ControladorSIRD(QObject):
         # Obtenemos el DataFrame del historial
         # Si está vacío, intentamos recargar de la DB
         df = self.motor.historial
-        if df.empty and self.motor.db:
+        if df.empty:
              df = self.motor.csv.historial()
         
         if df.empty: return []
@@ -1018,6 +1021,87 @@ class ControladorSIRD(QObject):
             print(f"Error extrayendo historial: {e}")
             return []
 
+    @Slot(str, result=list)
+    def obtener_ranking_global(self, criterio="I"):
+        """
+        Devuelve el ranking ordenado según el criterio:
+        'I': Infectados, 'M': Muertos, 'R': Recuperados, 'S': Sanos
+        """
+        if not hasattr(self.motor, 'dataframe'): return []
+        
+        df = self.motor.dataframe.copy()
+        
+        # Evitar división por cero
+        df["poblacion"] = df["poblacion"].replace(0, 1)
+        
+        # Seleccionamos la columna clave para ordenar
+        col_sort = "I"
+        if criterio == "M": col_sort = "M"
+        elif criterio == "R": col_sort = "R"
+        elif criterio == "S": col_sort = "S"
+        
+        # Calculamos el ratio específico para la barra de progreso
+        df["ratio"] = df[col_sort] / df["poblacion"]
+        
+        # Ordenamos de Mayor a Menor
+        df_sorted = df.sort_values(by=col_sort, ascending=False)
+        
+        # Extraemos Top 200
+        resultado = []
+        for index, row in df_sorted.iterrows():
+            # Filtro visual: Si el valor es 0, quizás no queramos mostrarlo (opcional)
+            # Pero para Sanos siempre habrá, así que lo dejamos pasar.
+            
+            resultado.append({
+                "nombre": str(row["Country Name"]),
+                "codigo": str(row.get("Country Code", "???")),
+                "poblacion": int(row["poblacion"]),
+                "valor": int(row[col_sort]), # El valor principal (ej. Muertos)
+                "ratio": float(row["ratio"]), # Para la barra (0.0 a 1.0)
+                "infectados": int(row["I"]),    # Datos extra por si acaso
+                "muertos": int(row["M"]),
+                "recuperados": int(row["R"]),
+                "sanos": int(row["S"])
+            })
+                
+        return resultado
+
+    @Slot(str, result='QVariantMap')
+    def obtener_detalle_pais(self, codigo_pais):
+        """
+        Calcula todos los datos necesarios para la gráfica de pastel en Python.
+        Retorna un diccionario listo para QML.
+        """
+        # Buscamos en el modelo de mapa (que ya tiene los datos frescos del último tick)
+        datos = next((p for p in self.mapa_modelo.paises if p["codigo"] == codigo_pais), None)
+        
+        if not datos:
+            return {"existe": False}
+            
+        pob = datos["poblacion"]
+        i = datos["infectado"]
+        r = datos["recuperado"]
+        m = datos.get("muerto", 0) # Asegurar que existe
+        
+        # Matemáticas aquí, no en QML
+        s = pob - i - r - m
+        if s < 0: s = 0 # Corrección de seguridad
+        
+        return {
+            "existe": True,
+            "nombre": datos["nombre"],
+            "poblacion": pob,
+            "valS": s,
+            "valI": i,
+            "valR": r,
+            "valM": m,
+            # Pre-calculamos porcentajes para tooltips (ahorramos JS)
+            "pctS": (s/pob)*100,
+            "pctI": (i/pob)*100,
+            "pctR": (r/pob)*100,
+            "pctM": (m/pob)*100
+        }
+
 --- FIN DE ARCHIVO: controllers/sird_controller.py ---
 
 --- INICIO DE ARCHIVO: controllers/mapa_modelo.py ---
@@ -1032,6 +1116,8 @@ class MapaModeloSIRD(QAbstractListModel):
     InfectadoRole = Qt.UserRole + 4
     RecuperadoRole = Qt.UserRole + 5
     ColorRole = Qt.UserRole + 6 
+    MuertoRole = Qt.UserRole + 7
+    PoblacionRole = Qt.UserRole + 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1073,7 +1159,9 @@ class MapaModeloSIRD(QAbstractListModel):
             self.PathRole: b"path",
             self.InfectadoRole: b"infectado",
             self.RecuperadoRole: b"recuperado",
-            self.ColorRole: b"color_pais" 
+            self.ColorRole: b"color_pais",
+            self.MuertoRole: b"muerto",     
+            self.PoblacionRole: b"poblacion"
         }
 
     def rowCount(self, parent=None):
@@ -1089,6 +1177,8 @@ class MapaModeloSIRD(QAbstractListModel):
         if role == self.InfectadoRole: return pais["infectado"]
         if role == self.RecuperadoRole: return pais["recuperado"]
         if role == self.ColorRole: return pais["color"]
+        if role == self.MuertoRole: return pais.get("muerto", 0) #.get por seguridad
+        if role == self.PoblacionRole: return pais["poblacion"]
         return None
 
     @Slot(str, result=str)
@@ -1163,7 +1253,7 @@ class MapaModeloSIRD(QAbstractListModel):
         if hay_cambios:
             top = self.index(idx_min, 0)
             bot = self.index(idx_max, 0)
-            self.dataChanged.emit(top, bot, [self.ColorRole])
+            self.dataChanged.emit(top, bot, [self.ColorRole, self.InfectadoRole, self.RecuperadoRole])
 
 --- FIN DE ARCHIVO: controllers/mapa_modelo.py ---
 
@@ -1185,6 +1275,7 @@ ApplicationWindow {
 
     // 1. BARRA SUPERIOR
     header: BarraSuperior {
+        visible: mainWindow.vistaActual === "mapa"
         onMenuClicked: opcionesDrawer.opened ? opcionesDrawer.close() : opcionesDrawer.open()
 
         // Conexión al Backend
@@ -1200,6 +1291,7 @@ ApplicationWindow {
     // 2. BARRA INFERIOR
     footer: BarraInferior {
         id: barraInf
+        visible: mainWindow.vistaActual === "mapa"
         
         // Data Bindings seguros
         dia: backend ? backend.dia : "1"
@@ -1236,7 +1328,11 @@ ApplicationWindow {
         Loader {
             id: mainLoader
             anchors.fill: parent
-            sourceComponent: mainWindow.vistaActual === "mapa" ? compMapa : compGrafico
+            sourceComponent: {
+                        if (mainWindow.vistaActual === "grafico") return compGrafico;
+                        if (mainWindow.vistaActual === "ranking") return compRanking; // NUEVO
+                        return compMapa;
+            }
         }
     }
 
@@ -1259,6 +1355,14 @@ ApplicationWindow {
             onVolverClicked: {
                 mainWindow.vistaActual = "mapa"
             }
+        }
+    }
+
+    Component {
+        id: compRanking
+        VistaRanking {
+            anchors.fill: parent
+            onVolverClicked: mainWindow.vistaActual = "mapa"
         }
     }
 }
@@ -1394,51 +1498,44 @@ Item {
                     PathSvg { path: model.path }
                 }
 
-                MouseArea {
-                    id: countryMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    containmentMask: countryShape
-                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
-                    
-                    // Permite arrastrar el mapa desde un país
-                    drag.target: mapContainer
-                    drag.filterChildren: true 
-
-                    onDoubleClicked: (mouse) => {
-                        let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
-                        mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
-                    }
-
-                    // --- TOOLTIP CORREGIDO ---
-                    onEntered: {
-                        if (!countryMouse.drag.active) {
-                            try {
-                                mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
-                            } catch(e) { mapRoot.tooltipHtml = "Cargando..." }
-                            
-                            mapRoot.isTooltipVisible = true
-                            // CORRECCIÓN: Usamos mouseX/mouseY directos, no el objeto 'mouse'
-                            updateTooltipPos(mouseX, mouseY)
-                        }
-                    }
-                    
-                    onPositionChanged: (mouse) => {
-                        if (countryMouse.drag.active) {
-                            mapRoot.isTooltipVisible = false
-                        } else {
-                            // Aquí 'mouse' sí existe porque viene de la señal
-                            updateTooltipPos(mouse.x, mouse.y)
-                        }
-                    }
-
-                    onExited: mapRoot.isTooltipVisible = false
-                    onCanceled: mapRoot.isTooltipVisible = false // Por si el arrastre cancela el hover
-
-                    function updateTooltipPos(mx, my) {
-                        var pos = mapToItem(mapRoot, mx, my)
-                        mapRoot.tipX = pos.x + 15
-                        mapRoot.tipY = pos.y + 15
+            MouseArea {
+                id: countryMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                containmentMask: countryShape
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                drag.target: mapContainer
+                drag.filterChildren: true
+                
+                onDoubleClicked: (mouse) => {
+                // 1. ZOOM (Tu lógica original)
+                    let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
+                    mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
+                
+                    // 2. DATOS DEL MODELO
+                    // Obtenemos los datos directamente del modelo actual (Repeater)
+                    var s = model.poblacion - model.infectado - model.recuperado // S calculado aprox o usar si lo tienes en modelo
+                    // Nota: Tu modelo actual tiene 'poblacion', 'infectado', 'recuperado'. 
+                    // Calculamos S y M (si lo tienes en el modelo añadelo, sino M=0 por ahora)
+                
+                    // NOTA IMPORTANTE: Para eficiencia, accedemos a las propiedades del modelo QML
+                    var i = model.infectado
+                    var r = model.recuperado
+                    var pob = model.poblacion
+                    var m = 0 // Si tu modelo tiene muertos, usa model.muertos
+                    var s_calc = pob - i - r - m
+                
+                    // 3. POSICIÓN DE PANTALLA
+                    // Convertimos la coordenada del clic (local al país) a coordenada global de la ventana
+                    var screenPos = countryMouse.mapToItem(mapRoot, mouse.x, mouse.y)
+                
+                    // 4. ABRIR POPUP
+                    infoPaisPopup.abrir(
+                        screenPos.x, 
+                        mapRoot.width, 
+                        mapRoot.height, 
+                        model.codigo 
+                    )
                     }
                 }
             }
@@ -1486,6 +1583,11 @@ Item {
             width: 50; height: 50; text: "-"; font.pixelSize: 24
             onClicked: mapRoot.setZoomManual(0.6)
         }
+    }
+    PieChartPopup {
+            id: infoPaisPopup
+            // Se asegura de estar encima del mapa
+            z: 9999 
     }
 }
 
@@ -1908,6 +2010,25 @@ Drawer {
                 Text { text: "Estadísticas"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
                 Item { Layout.fillHeight: true; height: 20 }
+
+                Button {
+                    Layout.fillWidth: true; height: 60
+                    background: Rectangle { 
+                        color: "#e67e22" // Naranja (Diferente al verde de la gráfica)
+                        radius: 8 
+                    }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "🏆"; font.pixelSize: 24 }
+                        Text { text: "Ranking de Países"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                    }
+                    
+                    onClicked: {
+                        if(backend) backend.pausar_simulacion()
+                        mainWindow.vistaActual = "ranking" // Cambiamos a la nueva vista
+                        rootDrawer.close()
+                    }
+                }
 
                 // BOTÓN: VER CURVA HISTÓRICA
                 Button {
