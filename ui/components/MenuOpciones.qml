@@ -204,10 +204,6 @@ Drawer {
                     }
                 }
 
-                Text { 
-                    text: "El mapa se cerrará temporalmente\npara optimizar el rendimiento." 
-                    color: "#7f8c8d"; font.italic: true; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
-                }
                 
                 Item { Layout.fillHeight: true }
                 

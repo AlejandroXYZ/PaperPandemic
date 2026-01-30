@@ -220,8 +220,16 @@ Item {
         }
     }
     PieChartPopup {
-            id: infoPaisPopup
-            // Se asegura de estar encima del mapa
-            z: 9999 
+        id: infoPaisPopup
+        // Se asegura de estar encima del mapa
+        z: 9999 
+
+        onIrARankingGlobal: {
+            mainWindow.vistaActual = "ranking"
+        }
+            
+        onIrAGraficaHistorica: {
+            mainWindow.vistaActual = "grafico"
+        }
     }
 }
