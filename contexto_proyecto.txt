@@ -17,7 +17,15 @@ if __name__ == "__main__":
     os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
     os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "Purple"
 
+
+
+
     app = QGuiApplication(sys.argv)
+
+    app.setOrganizationName("Alejandro Moncada")  
+    app.setOrganizationDomain("paperpandemic.com")
+    app.setApplicationName("PaperPandemic")
+    
     engine = QQmlApplicationEngine()
     
     # Instanciar el Controlador
@@ -124,19 +132,12 @@ class Engine():
         # Si no hay infectados Y NADIE ha muerto ni se ha recuperado (Inicio virgen)
         if infectados_totales == 0 and historia_pandemia == 0:
             print("☣️ Paciente Cero detectado.")
-            self.sir.infectar_primera_vez()
-            
-            pais_idx = self.opt.PAIS_INICIO
-            if pais_idx in self.dataframe.index:
-                self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
-            else:
-                self.primer_pais = "Desconocido"
-            
-            # Reiniciar día si empezamos de cero
+            self.sir.infectar_primera_vez()                
+            self.primer_pais = self.opt.PAIS_INICIO
+                        
             self.dia_simulacion = 1
             self.db = False 
-            
-            # Recalculamos para que el status no dé "Humanos Ganan" en este mismo tick
+                        
             infectados_totales = self.dataframe["I"].sum()
 
     # =================================================================
@@ -742,34 +743,29 @@ class Loader:
 --- INICIO DE ARCHIVO: backend/options.py ---
 from PySide6.QtCore import QObject, Signal, Property
 import os
+import json
 
 class Options(QObject):
     # =========================================================
-    # 1. CONSTANTES DE RUTA (Arreglado para carpeta 'backend')
+    # 1. CONSTANTES Y RUTAS
     # =========================================================
-    
-    # Obtenemos la ruta absoluta de la carpeta donde está ESTE archivo (backend/)
     _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-    
-    # Construimos las rutas apuntando a la carpeta 'data' dentro de 'backend'
     RUTA_DB_CREADA = os.path.join(_BACKEND_DIR, "data", "mundo.db")
     RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
+    
+    # NUEVO: Archivo para guardar tus preferencias
+    RUTA_CONFIG = os.path.join(_BACKEND_DIR, "data", "config.json")
 
-    # Constantes fijas del juego
-    PAIS_INICIO = "Venezuela"
+    # Constantes fijas de juego
     INFECTADOS_INICIALES = 2
-    INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
+    INFECTADOS_INICIALES_VECINOS = 11
     UMBRAL_INFECCION_EXTERNO = 500
     UMBRAL_ERRADICACION = 10
-    NOMBRE_VIRUS = "Paper-20" # ¡Cámbialo por el que quieras!
-    MAX_NOTICIAS_HISTORIAL = 50 # Límite para no llenar la RAM
-
-    # El porcentaje de población infectada necesario para que salgan aviones/barcos (0.4 = 40%)
+    MAX_NOTICIAS_HISTORIAL = 50 
     UMBRAL_PCT_TRANSPORTE = 0.40 
-    # Días de espera antes de poder volver a infectar por este medio
     DIAS_COOLDOWN_TRANSPORTE = 3
-    UMBRAL_PCT_FRONTERA = 0.05   # 20% de infectados para cruzar a pie
-    DIAS_COOLDOWN_FRONTERA = 2   # Espera entre contagios vecinales
+    UMBRAL_PCT_FRONTERA = 0.05   
+    DIAS_COOLDOWN_FRONTERA = 2   
 
     # =========================================================
     # 2. SEÑALES
@@ -778,71 +774,110 @@ class Options(QObject):
     gammaChanged = Signal(float)
     muChanged = Signal(float)
     pFronteraChanged = Signal(float)
+    virusNombreChanged = Signal(str)
+    paisInicioChanged = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Debug: Imprimimos la ruta para que verifiques en consola
-        print(f"📁 BUSCANDO DATOS EN: {self.RUTA_CSV}")
-
-        # =====================================================
-        # 3. VARIABLES DINÁMICAS
-        # =====================================================
+        # Valores por defecto
         self._beta = 0.5
         self._gamma = 0.02
         self._mu = 0.005
         self._p_frontera = 1.0
+        self._nombre_virus = "Paper-20"
+        self._pais_inicio = "Venezuela"
         
-        # Probabilidades extra
         self.PROBABILIDAD_INFECTAR_VUELO = 1.0
         self.PROBABILIDAD_INFECTAR_PUERTO = 1.0
 
-    # --- GETTERS Y SETTERS ---
+        # CARGAR CONFIGURACIÓN GUARDADA AL INICIAR
+        self.cargar_config()
+
+    # --- SISTEMA DE GUARDADO/CARGA (NUEVO) ---
+    def cargar_config(self):
+        if os.path.exists(self.RUTA_CONFIG):
+            try:
+                with open(self.RUTA_CONFIG, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Solo cargamos si existen las claves
+                    self._nombre_virus = data.get("nombre_virus", "Paper-20")
+                    self._pais_inicio = data.get("pais_inicio", "Venezuela")
+                    print("📂 Configuración cargada exitosamente.")
+            except Exception as e:
+                print(f"⚠️ Error cargando config: {e}")
+
+    def guardar_config(self):
+        data = {
+            "nombre_virus": self._nombre_virus,
+            "pais_inicio": self._pais_inicio
+        }
+        try:
+            with open(self.RUTA_CONFIG, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Error guardando config: {e}")
+
+    # --- GETTERS Y SETTERS CON AUTO-GUARDADO ---
+
+    @Property(str, notify=virusNombreChanged)
+    def NOMBRE_VIRUS(self): return self._nombre_virus
+
+    @NOMBRE_VIRUS.setter
+    def NOMBRE_VIRUS(self, val):
+        if self._nombre_virus != val:
+            self._nombre_virus = val
+            self.guardar_config() # <--- Guardamos al cambiar
+            self.virusNombreChanged.emit(val)
+
+    @Property(str, notify=paisInicioChanged)
+    def PAIS_INICIO(self): return self._pais_inicio
+
+    @PAIS_INICIO.setter
+    def PAIS_INICIO(self, val):
+        if self._pais_inicio != val:
+            self._pais_inicio = val
+            self.guardar_config() # <--- Guardamos al cambiar
+            self.paisInicioChanged.emit(val)
+
+    # (El resto de propiedades numéricas se mantienen igual, 
+    #  puedes agregarlas al save_config si quieres que también se guarden)
     @Property(float, notify=betaChanged)
     def beta(self): return self._beta
-
     @beta.setter
     def beta(self, val):
-        if self._beta != val:
-            self._beta = val
-            self.betaChanged.emit(val)
+        if self._beta != val: self._beta = val; self.betaChanged.emit(val)
 
     @Property(float, notify=gammaChanged)
     def gamma(self): return self._gamma
-
     @gamma.setter
     def gamma(self, val):
-        if self._gamma != val:
-            self._gamma = val
-            self.gammaChanged.emit(val)
+        if self._gamma != val: self._gamma = val; self.gammaChanged.emit(val)
 
     @Property(float, notify=muChanged)
     def mu(self): return self._mu
-
     @mu.setter
     def mu(self, val):
-        if self._mu != val:
-            self._mu = val
-            self.muChanged.emit(val)
+        if self._mu != val: self._mu = val; self.muChanged.emit(val)
 
     @Property(float, notify=pFronteraChanged)
     def p_frontera(self): return self._p_frontera
-
     @p_frontera.setter
     def p_frontera(self, val):
-        if self._p_frontera != val:
-            self._p_frontera = val
-            self.pFronteraChanged.emit(val)
+        if self._p_frontera != val: self._p_frontera = val; self.pFronteraChanged.emit(val)
 
 --- FIN DE ARCHIVO: backend/options.py ---
 
 --- INICIO DE ARCHIVO: controllers/sird_controller.py ---
-from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer
+from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer, QUrl
 from backend.engine import Engine
 from controllers.mapa_modelo import MapaModeloSIRD
 from backend.options import Options
 from collections import deque
 import random
+import os
+import datetime
+import pandas as pd
 
 class ControladorSIRD(QObject):
     # Señales
@@ -883,8 +918,12 @@ class ControladorSIRD(QObject):
 
         self.noticias_data = deque(maxlen=self.opciones.MAX_NOTICIAS_HISTORIAL)
         
-        # Para detectar cambios
-        self.paises_infectados_set = set()
+        # MEMORIA 1: Países infectados (Se borra y actualiza cada tick)
+        self.paises_infectados_set = set() 
+        
+        # [cite_start]MEMORIA 2: Hitos/Logros (NUEVO - Esto persiste para siempre) [cite: 98]
+        self.hitos_reportados = set()
+        
 
     @Property(QObject, constant=True)
     def config(self):
@@ -914,6 +953,15 @@ class ControladorSIRD(QObject):
 
     @Property(str, notify=noticiaCambio)
     def noticia(self): return self._noticia
+
+    @Property(list, constant=True)
+    def listaNombresPaises(self):
+        """Devuelve la lista alfabética de países para el ComboBox"""
+        if hasattr(self.motor, 'dataframe') and not self.motor.dataframe.empty:
+            # Obtenemos nombres únicos y los ordenamos
+            lista = sorted(self.motor.dataframe["Country Name"].unique().tolist())
+            return lista
+        return ["Cargando..."]
 
 
     @Slot(float)
@@ -984,8 +1032,8 @@ class ControladorSIRD(QObject):
         self.motor = Engine(self.opciones) # Motor nuevo con opciones
 
         self.paises_infectados_set = set()
+        self.hitos_reportados = set()      # <--- AÑADIR ESTO [cite: 109, 110]
         self.noticias_data.clear()
-        self.noticiasActualizadas.emit()
 
         self._noticia = "Simulación Reiniciada."
         
@@ -1044,17 +1092,17 @@ class ControladorSIRD(QObject):
         # --- LÓGICA DE NOTICIAS BLINDADA ---
         try:
             df = self.motor.dataframe
-            # Usamos getattr por si acaso olvidaste ponerlo en opciones
             virus = getattr(self.opciones, "NOMBRE_VIRUS", "Virus-X") 
-                
+            
             # 1. DETECTAR NUEVOS PAÍSES INFECTADOS
             infectados_ahora = set(df[df["I"] > 0]["Country Name"].tolist())
             nuevos = infectados_ahora - self.paises_infectados_set
-                
+            
             for pais_nombre in nuevos:
                 culpable = "Desconocido"
-                                
-                # Solo buscamos culpable si YA había infectados antes (no es el paciente cero)
+                        
+                # Solo buscamos culpable si YA había infectados antes
+                # Y usamos la lista LIMPIA (solo países reales)
                 if len(self.paises_infectados_set) > 0:
                     lista_previos = list(self.paises_infectados_set)
                     if lista_previos:
@@ -1067,22 +1115,34 @@ class ControladorSIRD(QObject):
                         ]
                         msg = random.choice(frases)
                     else:
-                        msg = f"¡{virus} aparece espontáneamente en {pais_nombre}!"
+                            msg = f"¡{virus} aparece en {pais_nombre}!"
                 else:
                     msg = f"☣️ ¡PACIENTE CERO detectado en {pais_nombre}!"
-                
+            
                 self.generar_noticia(msg, "INFECT")
-                
+            
+            # Actualizamos la lista de países (Esto borraba el 1M_INF antes)
             self.paises_infectados_set = infectados_ahora
-                            
-                            # 2. HITOS GLOBALES (Ejemplo: 1 Millón)
-            if self._infectados > 1000000 and "1M_INF" not in self.paises_infectados_set:
+                    
+            # 2. HITOS GLOBALES (Usamos la NUEVA memoria separada)
+            # Hito: 1 Millón
+            if self._infectados > 1000000 and "1M_INF" not in self.hitos_reportados:
                 self.generar_noticia(f"¡El mundo supera 1 Millón de infectados!", "INFO")
-                self.paises_infectados_set.add("1M_INF")
-                
+                self.hitos_reportados.add("1M_INF") # Guardamos en la memoria segura
+            
+            # Hito: 100 Millones
+            if self._infectados > 100000000 and "100M_INF" not in self.hitos_reportados:
+                self.generar_noticia(f"¡CATASTROFE: 100 Millones de infectados!", "DEATH")
+                self.hitos_reportados.add("100M_INF")
+            
+            # Hito: 50% Población Mundial (aprox 4 billones)
+            if self._infectados > 4000000000 and "HALF_WORLD" not in self.hitos_reportados:
+                self.generar_noticia(f"¡La mitad de la humanidad ha contraído {virus}!", "DEATH")
+                self.hitos_reportados.add("HALF_WORLD")
+            
         except Exception as e:
             print(f"⚠️ Error generando noticia: {e}")
-            # No detenemos la simulación por un error de texto
+                    
                         
         # --- FIN LÓGICA NOTICIAS ---
                 
@@ -1261,9 +1321,75 @@ class ControladorSIRD(QObject):
         self.noticias_data.appendleft(item)
 
         # Enviamos solo el texto al ticker (barra inferior)
+        self._noticia = mensaje
         self.noticiaCambio.emit(mensaje)
         # Avisamos a la lista completa
         self.noticiasActualizadas.emit()
+
+
+    @Slot(str)
+    def exportar_datos_excel(self, file_url):
+        """
+        Genera DOS archivos CSV basados en la ruta elegida por el usuario:
+        1. [Nombre]_Estado_Actual.csv (Datos por país)
+        2. [Nombre]_Historial_Global.csv (Datos temporales de la DB)
+        """
+        try:
+            if not hasattr(self.motor, 'dataframe'): return
+            
+            # 1. LIMPIEZA DE RUTA (Cross-Platform)
+            ruta_limpia = QUrl(file_url).toLocalFile()
+            
+            # Separamos nombre y extensión para insertar los sufijos
+            # Ej: "/home/user/Datos.csv" -> base="/home/user/Datos", ext=".csv"
+            base, ext = os.path.splitext(ruta_limpia)
+            if not ext: ext = ".csv" # Por si el usuario no puso extensión
+            
+            # ---------------------------------------------------------
+            # ARCHIVO 1: ESTADO ACTUAL (Tabla de Países)
+            # ---------------------------------------------------------
+            ruta_estado = f"{base}_Estado_Actual{ext}"
+            self.motor.dataframe.to_csv(ruta_estado, index=False, encoding='utf-8-sig')
+            
+            # ---------------------------------------------------------
+            # ARCHIVO 2: HISTORIAL (Tabla de Tiempo)
+            # ---------------------------------------------------------
+            ruta_historial = f"{base}_Historial_Global{ext}"
+            
+            # Intentamos obtener el historial fresco desde la base de datos
+            df_historial = pd.DataFrame()
+            try:
+                # Usamos el método que ya tienes en loader.py
+                df_historial = self.motor.csv.historial()
+            except Exception as e:
+                print(f"⚠️ Error leyendo historial DB: {e}")
+
+            if not df_historial.empty:
+                df_historial.to_csv(ruta_historial, index=False, encoding='utf-8-sig')
+                mensaje_extra = " y Historial"
+            else:
+                mensaje_extra = " (Historial vacío)"
+
+            # ---------------------------------------------------------
+            # NOTIFICACIÓN
+            # ---------------------------------------------------------
+            nombre_base = os.path.basename(base)
+            self.generar_noticia(f"💾 Guardado: {nombre_base}_Estado{ext} y {nombre_base}_Historial{ext}", "INFO")
+            
+            print(f"✅ Exportación exitosa:")
+            print(f"   📄 {ruta_estado}")
+            print(f"   📄 {ruta_historial}")
+            
+        except Exception as e:
+            self.generar_noticia("❌ Error crítico al exportar.", "DEATH")
+            print(f"Error exportando: {e}")
+
+
+    @Slot(list)
+    def cambiar_tema_mapa(self, lista_colores):
+        """Recibe ['#RRGGBB', ...] y actualiza el modelo del mapa"""
+        print(f"🎨 Cambiando paleta del mapa: {lista_colores}")
+        self.mapa_modelo.actualizar_paleta_colores(lista_colores)
 
 --- FIN DE ARCHIVO: controllers/sird_controller.py ---
 
@@ -1273,6 +1399,7 @@ import json
 import os
 
 class MapaModeloSIRD(QAbstractListModel):
+    # Definimos los Roles (Variables que QML puede leer)
     CodigoRole = Qt.UserRole + 1
     NombreRole = Qt.UserRole + 2
     PathRole = Qt.UserRole + 3
@@ -1286,9 +1413,8 @@ class MapaModeloSIRD(QAbstractListModel):
         super().__init__(parent)
         self.paises = []
         
-        # Cargar geometría del mapa
+        # 1. CARGA DE GEOMETRÍA (paises.json)
         try:
-            # Truco para ruta segura
             BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             json_path = os.path.join(BASE_DIR, "ui", "assets", "paises.json")
             with open(json_path, encoding='utf-8') as f:
@@ -1297,24 +1423,39 @@ class MapaModeloSIRD(QAbstractListModel):
             print(f"❌ Error cargando paises.json: {e}")
             self.geometria = {}
 
+        # 2. DICCIONARIO DE ALIAS (CRUCIAL: Esto arregla el "Sin datos" en islas)
+        self.alias_map = {
+            "BAK": "UMI", "GLO": "UMI", "HOW": "UMI", "JAR": "UMI", 
+            "JHN": "UMI", "JUA": "UMI", "MID": "UMI", "WAK": "UMI", 
+            "XKX": "XKX"
+        }
+
+        # 3. Paleta de colores
+        self.paleta_actual = [
+            (0.00, 162, 178, 243), # Azul
+            (0.25, 156, 39, 176),  # Morado
+            (0.50, 233, 30, 99),   # Rosa
+            (0.75, 213, 0, 0),     # Rojo
+            (1.00, 100, 0, 0)      # Rojo Oscuro
+        ]
+
         self._inicializar_vacio()
 
     def _inicializar_vacio(self):
-        """Estado inicial: Todo azul tranquilo"""
+        """Estado inicial: Todo en cero"""
         self.beginResetModel()
         self.paises = []
-        for codigo, path in self.geometria.items():
+        # Ordenamos para consistencia
+        for codigo, path in sorted(self.geometria.items()):
             self.paises.append({
-                "codigo": codigo,
+                "codigo": codigo, # QML usa model.codigo
                 "nombre": codigo, 
                 "path": path,
-                "infectado": 0,
-                "recuperado": 0,
-                "poblacion": 1, 
+                "infectado": 0, "recuperado": 0, "muerto": 0, "poblacion": 1, 
                 "color": "#A2B2F3"
             })
         self.endResetModel()
-        # Esto permite encontrar un país instantáneamente sin buscar en la lista
+        # Diccionario rápido para búsquedas O(1)
         self._indice_rapido = {p["codigo"]: i for i, p in enumerate(self.paises)}
 
     def roleNames(self):
@@ -1325,7 +1466,7 @@ class MapaModeloSIRD(QAbstractListModel):
             self.InfectadoRole: b"infectado",
             self.RecuperadoRole: b"recuperado",
             self.ColorRole: b"color_pais",
-            self.MuertoRole: b"muerto",     
+            self.MuertoRole: b"muerto",      
             self.PoblacionRole: b"poblacion"
         }
 
@@ -1342,63 +1483,50 @@ class MapaModeloSIRD(QAbstractListModel):
         if role == self.InfectadoRole: return pais["infectado"]
         if role == self.RecuperadoRole: return pais["recuperado"]
         if role == self.ColorRole: return pais["color"]
-        if role == self.MuertoRole: return pais.get("muerto", 0) #.get por seguridad
+        if role == self.MuertoRole: return pais.get("muerto", 0)
         if role == self.PoblacionRole: return pais["poblacion"]
         return None
 
-
+    # --- MÉTODOS PARA TOOLTIP (Arregla el mensaje "Sin datos") ---
     @Slot(str, result=str)
     def get_datos_pais_html(self, codigo_pais):
-        # OPTIMIZACIÓN O(1): Usamos el diccionario en vez de un bucle for
         idx = self._indice_rapido.get(codigo_pais)
         
         if idx is not None:
             pais = self.paises[idx]
             pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
-            pct = (pais['infectado'] / pob) * 100
+            
+            # Formato de números con separador de miles
+            def fmt(n): return "{:,}".format(int(n))
+            
+            pct = ((pais['infectado'] + pais['recuperado'] + pais['muerto']) / pob) * 100
             
             return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
-                    f"👥 Población: {pob:,}<br>"
-                    f"🤒 Infectados: {pais['infectado']:,} ({pct:.2f}%)<br>"
-                    f"💚 Recuperados: {pais['recuperado']:,}")
+                    f"👥 Pob: {fmt(pob)}<br>"
+                    f"<span style='color:#f44336'>■ Inf: {fmt(pais['infectado'])}</span><br>"
+                    f"<span style='color:#2196f3'>■ Rec: {fmt(pais['recuperado'])}</span><br>"
+                    f"<span style='color:#9e9e9e'>■ Mue: {fmt(pais['muerto'])}</span>")
         
         return "Sin datos"
 
-
-
-    def calcular_color_hex(self, porcentaje):
-        # Gradiente normalizado 0.0 a 1.0
-        stops = [
-            (0.00, 162, 178, 243), # Azul Base
-            (0.25, 156, 39, 176),  # Morado
-            (0.50, 233, 30, 99),   # Rosa
-            (0.75, 213, 0, 0),     # Rojo
-            (1.00, 100, 0, 0)      # Rojo Oscuro
-        ]
-        for i in range(len(stops) - 1):
-            t1, r1, g1, b1 = stops[i]
-            t2, r2, g2, b2 = stops[i+1]
-            if porcentaje <= t2:
-                factor = (porcentaje - t1) / (t2 - t1)
-                r = int(r1 + (r2 - r1) * factor)
-                g = int(g1 + (g2 - g1) * factor)
-                b = int(b1 + (b2 - b1) * factor)
-                return f"#{r:02x}{g:02x}{b:02x}"
-        return "#640000"
-
+    # --- LÓGICA DE ACTUALIZACIÓN (Con Alias) ---
     def actualizar_datos(self, lista_paises):
         if not self.paises or not lista_paises: return
         
-        # Diccionario para acceso rápido O(1)
+        # Diccionario del Backend
         datos_dict = { fila["Country Code"]: fila for fila in lista_paises if "Country Code" in fila }
         
         hay_cambios = False
         idx_min, idx_max = len(self.paises), 0
 
         for i, pais in enumerate(self.paises):
-            codigo = pais["codigo"]
-            if codigo in datos_dict:
-                dato = datos_dict[codigo]
+            codigo_mapa = pais["codigo"]
+            
+            # TRADUCCIÓN: Si el mapa dice "BAK", buscamos "UMI" en el CSV
+            codigo_busqueda = self.alias_map.get(codigo_mapa, codigo_mapa)
+            
+            if codigo_busqueda in datos_dict:
+                dato = datos_dict[codigo_busqueda]
                 
                 i_val = int(dato.get("I", 0))
                 r_val = int(dato.get("R", 0))
@@ -1414,7 +1542,7 @@ class MapaModeloSIRD(QAbstractListModel):
                 if "Country Name" in dato:
                     pais["nombre"] = dato["Country Name"]
                 
-                # Color
+                # Calcular Color
                 pct = (i_val + r_val + m_val) / pob
                 nuevo_color = self.calcular_color_hex(pct)
                 
@@ -1429,12 +1557,52 @@ class MapaModeloSIRD(QAbstractListModel):
             bot = self.index(idx_max, 0)
             self.dataChanged.emit(top, bot, [self.ColorRole, self.InfectadoRole, self.RecuperadoRole])
 
+    # --- UTILIDADES DE COLOR (Para los Temas) ---
+    def _hex_to_rgb(self, hex_color):
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+    def calcular_color_hex(self, porcentaje):
+        stops = self.paleta_actual
+        for i in range(len(stops) - 1):
+            t1, r1, g1, b1 = stops[i]
+            t2, r2, g2, b2 = stops[i+1]
+            if porcentaje <= t2:
+                dist = t2 - t1
+                if dist == 0: return f"#{r1:02x}{g1:02x}{b1:02x}"
+                factor = (porcentaje - t1) / dist
+                r = int(r1 + (r2 - r1) * factor)
+                g = int(g1 + (g2 - g1) * factor)
+                b = int(b1 + (b2 - b1) * factor)
+                return f"#{r:02x}{g:02x}{b:02x}"
+        _, lr, lg, lb = stops[-1]
+        return f"#{lr:02x}{lg:02x}{lb:02x}"
+
+    def actualizar_paleta_colores(self, lista_hex):
+        if len(lista_hex) != 5: return
+        nuevos_stops = []
+        pasos = [0.00, 0.25, 0.50, 0.75, 1.00]
+        for i, hex_code in enumerate(lista_hex):
+            r, g, b = self._hex_to_rgb(hex_code)
+            nuevos_stops.append((pasos[i], r, g, b))
+        self.paleta_actual = nuevos_stops
+        
+        # Forzar repintado total
+        for pais in self.paises:
+            pob = pais["poblacion"]
+            infectados = pais["infectado"] + pais["recuperado"] + pais.get("muerto", 0)
+            pct = infectados / pob if pob > 0 else 0
+            pais["color"] = self.calcular_color_hex(pct)
+            
+        self.dataChanged.emit(self.index(0,0), self.index(len(self.paises)-1, 0), [self.ColorRole])
+
 --- FIN DE ARCHIVO: controllers/mapa_modelo.py ---
 
 --- INICIO DE ARCHIVO: ui/main.qml ---
 import QtQuick
 import QtQuick.Controls
 import components
+import themes
 
 ApplicationWindow {
     id: mainWindow
@@ -1442,7 +1610,11 @@ ApplicationWindow {
     width: 1200
     height: 720
     title: "Simulador SIRD - Dashboard"
-    color: "#121212"
+    color: theme.appBackground
+
+    ThemeManager {
+            id: theme
+    }
     
 
     // Propiedad de estado: controla si vemos el "mapa" o el "grafico"
@@ -1485,6 +1657,7 @@ ApplicationWindow {
         id: opcionesDrawer
         y: header.height
         height: parent.height - header.height - footer.height
+        themeManager: theme
     }
 
     // 4. CONTENEDOR PRINCIPAL (Loader Dinámico)
@@ -1594,6 +1767,16 @@ Item {
     id: mapRoot
     anchors.fill: parent
     clip: true
+
+    Rectangle {
+        anchors.fill: mapRoot
+        // Usamos una conexión segura al ThemeManager global
+        // Nota: Accedemos a 'theme' porque es un id global en main.qml
+        color: theme ? theme.mapBackground : "#121212"
+            
+        // Animación suave al cambiar de tema
+        Behavior on color { ColorAnimation { duration: 500 } }
+    }
 
     // =========================================================
     // 1. TOOLTIP (Variables Globales)
@@ -1708,11 +1891,16 @@ Item {
 
                 ShapePath {
                     strokeWidth: 1.0 / mapContainer.scale 
-                    strokeColor: "white"
+                    
+                    // --- CAMBIO AQUÍ ---
+                    strokeColor: theme ? theme.mapStroke : "white" 
+                    // -------------------
+                    
                     fillColor: (model.color_pais && model.color_pais !== "") ? model.color_pais : "#CFD8DC"
                     fillRule: ShapePath.WindingFill
                     PathSvg { path: model.path }
                 }
+                
 
             MouseArea {
                 id: countryMouse
@@ -1959,53 +2147,73 @@ ToolBar {
         Item { Layout.fillWidth: true }
 
         // --- SECCIÓN DE NOTICIAS ---
-    Rectangle {
-        Layout.fillWidth: true
-        Layout.fillHeight: true
-        color: "transparent"
-        clip: true // IMPORTANTE: Corta el texto que se sale
-
-        Text {
-            id: tickerText
-            text: backend ? backend.noticia : "Esperando datos..."
-            color: "#e0e0e0"
-            font.pixelSize: 16
-            font.bold: true
-            font.family: "Courier New" // Estilo teletipo
-            verticalAlignment: Text.AlignVCenter
-            
-            // Posición inicial: Fuera de la pantalla a la derecha
-            x: parent.width 
-            anchors.verticalCenter: parent.verticalCenter
-
-            // ANIMACIÓN TIPO PLAGUE INC
-            NumberAnimation on x {
-                from: parent.width // Empieza a la derecha
-                to: -tickerText.width // Termina cuando todo el texto ha salido por la izquierda
-                duration: 8000 // 8 segundos (ajusta velocidad)
-                loops: Animation.Infinite
-                running: true
+        Rectangle {
+            id: newsContainer
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+                
+            // MÁRGENES: Para que el borde no toque los extremos de la pantalla
+            Layout.topMargin: 10
+            Layout.bottomMargin: 10
+            Layout.rightMargin: 20 
+                
+            color: "#15ffffff" // Fondo blanco muy transparente (efecto cristal)
+                
+            // --- EL BORDE QUE PEDISTE ---
+            border.color: "white"
+            border.width: 1
+            radius: 6 // Esquinas redondeadas para que se vea moderno
+                
+            clip: true // IMPORTANTE: Corta el texto que se sale
+    
+            Text {
+                id: tickerText
+                text: backend ? backend.noticia : "Esperando datos..."
+                color: "#e0e0e0"
+                font.pixelSize: 16
+                font.bold: true
+                font.family: "Courier New" 
+                verticalAlignment: Text.AlignVCenter
+                    
+                x: parent.width 
+                anchors.verticalCenter: parent.verticalCenter
+    
+                NumberAnimation on x {
+                    from: parent.width 
+                    to: -tickerText.width 
+                    duration: 8000 
+                    loops: Animation.Infinite
+                    running: true
+                }
+                    
+                onTextChanged: {
+                    // Reinicio de animación
+                }
             }
-            
-            // Reiniciar animación si cambia el texto
-            onTextChanged: {
-                // Truco para reiniciar la animación suavemente
-                // En una app real usaríamos un SequentialAnimation más complejo,
-                // pero esto funciona para el efecto básico.
+    
+            // AREA CLICKEABLE CON EFECTO VISUAL
+            MouseArea {
+                id: newsMouse
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                hoverEnabled: true // Para detectar cuando pasas el mouse
+                    
+                onClicked: {
+                    if(backend) backend.pausar_simulacion()
+                    mainWindow.vistaActual = "noticias"
+                }
+            }
+                
+            // EFECTO EXTRA: Iluminar el borde cuando pasas el mouse
+            states: State {
+                name: "hovered"
+                when: newsMouse.containsMouse
+                PropertyChanges { target: newsContainer; border.color: "#00cec9"; color: "#25ffffff" }
+            }
+            transitions: Transition {
+                ColorAnimation { duration: 200 }
             }
         }
-
-        // AREA CLICKEABLE (Para abrir el historial completo)
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                // Al hacer clic, abrimos la vista completa
-                if(backend) backend.pausar_simulacion()
-                mainWindow.vistaActual = "noticias"
-            }
-        }
-    }
     }
 }
 
@@ -2094,20 +2302,38 @@ ToolBar {
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs 6.3 // IMPORTANTE: Para abrir el gestor de archivos nativo
 
 Drawer {
     id: rootDrawer
-    width: 300
+    width: 320 // Aumentamos un poco el ancho para evitar cortes en Linux/Gnome
     modal: false
     dim: false
     closePolicy: Popup.NoAutoClose
     background: Rectangle { color: "#1e1e2e" }
     
-    // Control de navegación interna: 0=Menu, 1=Config, 2=Params, 3=Stats
-    property int vistaActual: 0 
+    // Propiedad para evitar que los elementos se salgan visualmente
+    clip: true 
 
-    // Al abrir el menú, pausamos para ahorrar recursos
+    property int vistaActual: 0 
+    property var themeManager: null
+    
     onOpened: if(backend) backend.pausar_simulacion()
+
+    // --- COMPONENTE DE DIÁLOGO NATIVO ---
+    FileDialog {
+        id: fileDialog
+        title: "Exportar Datos de la Simulación"
+        nameFilters: ["Archivos CSV (*.csv)", "Todos los archivos (*)"]
+        // Por defecto sugiere un nombre, pero deja al usuario cambiarlo y elegir carpeta
+        currentFile: "Reporte_Pandemia_" + Qt.formatDateTime(new Date(), "yyyy-MM-dd") + ".csv"
+        fileMode: FileDialog.SaveFile
+        
+        onAccepted: {
+            // Pasamos la ruta elegida (selectedFile) al backend
+            if(backend) backend.exportar_datos_excel(selectedFile)
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -2133,12 +2359,19 @@ Drawer {
             currentIndex: rootDrawer.vistaActual
             Layout.fillWidth: true
             Layout.fillHeight: true
+            
+            // FIX DE DESBORDAMIENTO:
+            // Aseguramos que el StackLayout respete los márgenes del padre
+            clip: true 
 
             // -----------------------------------------------------
             // ÍNDICE 0: MENÚ PRINCIPAL
             // -----------------------------------------------------
             ColumnLayout {
                 spacing: 15
+                // Layout.fillWidth asegura que los hijos se estiren al ancho disponible
+                Layout.fillWidth: true 
+
                 Text { text: "Menú Principal"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
                 Button {
@@ -2166,44 +2399,162 @@ Drawer {
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 1: CONFIGURACIÓN
+            // ÍNDICE 1: CONFIGURACIÓN (Con Exportar Mejorado)
             // -----------------------------------------------------
             ColumnLayout {
+                spacing: 20
+                Layout.fillWidth: true
+
                 Text { text: "Configuración"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
-                Text { 
-                    text: "Próximamente...\nAquí podrás cambiar el idioma,\ntemas de color, etc." 
-                    color: "#7f8c8d"; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true 
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "🎨 Tema Visual"; color: "#bdc3c7"; font.bold: true }
+                    
+                    ComboBox {
+                        id: comboTema
+                        Layout.fillWidth: true
+                        // Obtenemos la lista del ThemeManager
+                        model: rootDrawer.themeManager ? rootDrawer.themeManager.themeNames : []
+                        
+                        // Seleccionar el actual al inicio
+                        Component.onCompleted: currentIndex = find("Default (Dark)")
+
+                        delegate: ItemDelegate {
+                            width: comboTema.width
+                            contentItem: Text { text: modelData; color: "white"; font.pixelSize: 14 }
+                            background: Rectangle { color: hovered ? "#3a3f55" : "#1e1e2e" }
+                        }
+                        contentItem: Text { 
+                            text: comboTema.displayText; color: "white"; leftPadding: 10; verticalAlignment: Text.AlignVCenter 
+                        }
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: "#555" }
+
+                        onActivated: {
+                            if(rootDrawer.themeManager) {
+                                // 1. Cambiar colores de la UI (QML)
+                                rootDrawer.themeManager.setTheme(currentText)
+                                
+                                // 2. Cambiar lógica de colores del Mapa (Python)
+                                if(backend) {
+                                    var nuevaPaleta = rootDrawer.themeManager.currentGradient
+                                    backend.cambiar_tema_mapa(nuevaPaleta)
+                                }
+                            }
+                        }
+                    }
                 }
-                
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+
+
+
+                // 1. NOMBRE VIRUS
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "🏷️ Nombre del Virus"; color: "#bdc3c7"; font.bold: true }
+                    TextField {
+                        Layout.fillWidth: true
+                        placeholderText: "Ej: Paper-20"
+                        text: backend ? backend.config.NOMBRE_VIRUS : ""
+                        color: "white"
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: parent.activeFocus ? "#00cec9" : "#555" }
+                        onTextEdited: if(backend) backend.config.NOMBRE_VIRUS = text
+                    }
+                }
+
+                // 2. PAÍS INICIO
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "📍 Zona Cero (Origen)"; color: "#bdc3c7"; font.bold: true }
+                    ComboBox {
+                        id: comboPais
+                        Layout.fillWidth: true
+                        model: backend ? backend.listaNombresPaises : []
+                        Component.onCompleted: {
+                            if(backend) {
+                                var idx = find(backend.config.PAIS_INICIO)
+                                if (idx !== -1) currentIndex = idx
+                            }
+                        }
+                        delegate: ItemDelegate {
+                            width: comboPais.width
+                            contentItem: Text { text: modelData; color: "white"; font.pixelSize: 14 }
+                            background: Rectangle { color: hovered ? "#3a3f55" : "#1e1e2e" }
+                        }
+                        contentItem: Text { 
+                            text: comboPais.displayText; color: "white"; leftPadding: 10; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight 
+                        }
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: "#555" }
+                        onActivated: if(backend) backend.config.PAIS_INICIO = currentText
+                    }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+                // 4. EXPORTAR DATOS (AHORA ABRE DIÁLOGO)
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#27ae60"; radius: 8 }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "💾"; font.pixelSize: 20 }
+                        Text { text: "Exportar (.csv)"; color: "white"; font.bold: true }
+                    }
+                    // AQUÍ ESTÁ EL CAMBIO: Abrimos el diálogo, no llamamos al backend directo
+                    onClicked: fileDialog.open()
+                }
+
                 Item { Layout.fillHeight: true }
                 
                 Button {
                     Layout.fillWidth: true; flat: true
-                    contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
-                    onClicked: rootDrawer.vistaActual = 0
+                    contentItem: Text { 
+                        text: "⬅ Volver y Aplicar"; // Cambié el texto para que sea obvio
+                        color: "#ff5252"; 
+                        font.bold: true; 
+                        horizontalAlignment: Text.AlignHCenter 
+                    }
+                    onClicked: {
+                        // 1. REINICIAMOS LA SIMULACIÓN
+                        if(backend) backend.reiniciar_simulacion()
+                        
+                        // 2. VOLVEMOS AL MENÚ PRINCIPAL
+                        rootDrawer.vistaActual = 0
+                        
+                        // Opcional: Cerrar el menú automáticamente
+                        // rootDrawer.close() 
+                    }
                 }
             }
 
             // -----------------------------------------------------
-            // ÍNDICE 2: PARÁMETROS (SLIDERS)
+            // ÍNDICE 2: PARÁMETROS
             // -----------------------------------------------------
             ScrollView {
-                clip: true
+                clip: true // Evita que el scroll se salga
+                Layout.fillWidth: true 
+                Layout.fillHeight: true
+
                 ColumnLayout {
-                    width: parent.width
+                    width: parent.width // Forzamos ancho del contenido al del padre
                     spacing: 20
 
                     Text { text: "Ajuste de Variables"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
                     SliderControl {
-                        titulo: "⏩ Velocidad Simulación"
+                        titulo: "⏩ Velocidad"
                         valorInicial: 0.5; maximo: 2.0
                         onValorCambiado: (val) => { if(backend) backend.cambiar_velocidad(val) }
                     }
                     
                     SliderControl {
-                        titulo: "Tasa de Contagio (β)"
+                        titulo: "Tasa Contagio (β)"
                         valorInicial: backend ? backend.config.beta : 0.5; maximo: 1.0
                         onValorCambiado: (val) => { if(backend) backend.config.beta = val }
                     }
@@ -2231,16 +2582,13 @@ Drawer {
                     Button {
                         Layout.fillWidth: true; height: 50
                         background: Rectangle { color: "#e74c3c"; radius: 8 }
-                        contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        onClicked: {
-                            if(backend) backend.reiniciar_simulacion()
-                            // Nos quedamos aquí para ver el cambio
-                        }
+                        contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 14 }
+                        onClicked: if(backend) backend.reiniciar_simulacion()
                     }
 
                     Button {
                         Layout.fillWidth: true; flat: true
-                        contentItem: Text { text: "⬅ Volver al Menú"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
+                        contentItem: Text { text: "⬅ Volver"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
                         onClicked: rootDrawer.vistaActual = 0
                     }
                 }
@@ -2250,54 +2598,42 @@ Drawer {
             // ÍNDICE 3: ESTADÍSTICAS
             // -----------------------------------------------------
             ColumnLayout {
+                spacing: 15
+                Layout.fillWidth: true
                 Text { text: "Estadísticas"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
                 
                 Item { Layout.fillHeight: true; height: 20 }
 
                 Button {
                     Layout.fillWidth: true; height: 60
-                    background: Rectangle { 
-                        color: "#e67e22" // Naranja (Diferente al verde de la gráfica)
-                        radius: 8 
-                    }
+                    background: Rectangle { color: "#e67e22"; radius: 8 }
                     contentItem: RowLayout {
                         anchors.centerIn: parent
                         Text { text: "🏆"; font.pixelSize: 24 }
-                        Text { text: "Ranking de Países"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                        Text { text: "Ranking Global"; color: "white"; font.bold: true; font.pixelSize: 16 }
                     }
-                    
                     onClicked: {
                         if(backend) backend.pausar_simulacion()
-                        mainWindow.vistaActual = "ranking" // Cambiamos a la nueva vista
+                        mainWindow.vistaActual = "ranking"
                         rootDrawer.close()
                     }
                 }
 
-                // BOTÓN: VER CURVA HISTÓRICA
                 Button {
                     Layout.fillWidth: true; height: 60
-                    background: Rectangle { 
-                        color: "#2ecc71" 
-                        radius: 8 
-                    }
+                    background: Rectangle { color: "#2ecc71"; radius: 8 }
                     contentItem: RowLayout {
                         anchors.centerIn: parent
                         Text { text: "📈"; font.pixelSize: 24 }
-                        Text { text: "Ver Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                        Text { text: "Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
                     }
-                    
                     onClicked: {
                         if(backend) backend.pausar_simulacion()
-                        
-                        // Cambiamos la vista principal en main.qml
                         mainWindow.vistaActual = "grafico"
-                        
-                        // Cerramos el menú
                         rootDrawer.close()
                     }
                 }
 
-                
                 Item { Layout.fillHeight: true }
                 
                 Button {
@@ -2327,7 +2663,7 @@ Drawer {
             id: slider
             Layout.fillWidth: true
             from: 0.0; to: maximo; value: valorInicial; stepSize: 0.001
-            onMoved: parent.valorCambiado(value) // Actualización en tiempo real
+            onMoved: parent.valorCambiado(value) 
         }
     }
 }
@@ -2360,10 +2696,15 @@ Rectangle {
     signal irARankingGlobal()  // NUEVA
     signal irAGraficaHistorica() // NUEVA
 
-    readonly property color cS: "#DCE775"
-    readonly property color cI: "#ff5252"
-    readonly property color cR: "#4fc3f7"
-    readonly property color cM: "#95a5a6"
+    property color cS: theme ? theme.pieS : "#DCE775"
+    property color cI: theme ? theme.pieI : "#ff5252"
+    property color cR: theme ? theme.pieR : "#4fc3f7"
+    property color cM: theme ? theme.pieM : "#95a5a6"
+
+    onCSChanged: pieCanvas.requestPaint()
+    onCIChanged: pieCanvas.requestPaint()
+    onCRChanged: pieCanvas.requestPaint()
+    onCMChanged: pieCanvas.requestPaint()
 
     property int hoveredSlice: -1
     property string tooltipText: ""
@@ -3356,7 +3697,7 @@ Item {
                         color: "white"
                         font.pixelSize: 16
                         font.family: "Segoe UI"
-                        elide: Text.ElideRight
+                        wrapMode: Text.WordWrap
                     }
                     
                     // ICONO
