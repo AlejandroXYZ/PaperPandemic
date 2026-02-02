@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 name: Compilación Paper-Pandemic
 
 on:
@@ -40,3 +41,57 @@ jobs:
         with:
             name: SimuladorSIRD_Linux
             path: build/SimuladorSIRD_Linux.tar.gz    
+=======
+name: Compilar SIRD Linux
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Instalar Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12' 
+        cache: 'pip'
+
+    - name: Instalar Dependencias del Sistema
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libfuse2 patchelf ccache
+
+    - name: Instalar Librerías Python
+      run: |
+        pip install -r requirements.txt
+        pip install nuitka
+        # Si no tienes requirements.txt, descomenta y usa esto:
+        # pip install pyside6 pandas numpy
+
+    - name: Compilar con Nuitka
+      run: |
+        python -m nuitka --standalone \
+          --enable-plugin=pyside6 \
+          --include-qt-plugins=qml \
+          --include-data-dir=ui=ui \
+          --include-data-dir=backend/data=backend/data \
+          --output-dir=build \
+          main.py
+
+    - name: Comprimir Resultado
+      run: |
+        cd build
+        tar -czvf SimuladorSIRD_Linux.tar.gz main.dist
+
+    - name: Subir Artefacto (Descargable)
+      uses: actions/upload-artifact@v4
+      with:
+        name: SimuladorSIRD_Linux
+        path: build/SimuladorSIRD_Linux.tar.gz
+>>>>>>> 7074226 (Añadida carpeta .github CI/CD para que los servidores de github compilen el proyecto)
