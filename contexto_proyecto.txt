@@ -17,7 +17,15 @@ if __name__ == "__main__":
     os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
     os.environ["QT_QUICK_CONTROLS_MATERIAL_ACCENT"] = "Purple"
 
+
+
+
     app = QGuiApplication(sys.argv)
+
+    app.setOrganizationName("Alejandro Moncada")  
+    app.setOrganizationDomain("paperpandemic.com")
+    app.setApplicationName("PaperPandemic")
+    
     engine = QQmlApplicationEngine()
     
     # Instanciar el Controlador
@@ -54,36 +62,54 @@ class Engine():
     def __init__(self, opciones_instancia):
         self.opt = opciones_instancia    
         self.csv = Loader(self.opt)
-        
+                    
         # Intentar crear/conectar DB
+        # self.db devuelve True si es NUEVA, False si ya EXISTÍA
         self.db = self.csv.crear_db()
-        
-        # --- NUEVO: CONTADOR DE DÍAS INTERNO ---
-        self.dia_simulacion = 1 
-        
+        self.dia_simulacion = 1
+        self.dias_consecutivos_cero = 0 
+                    
+        # --- LÓGICA DE CARGA SEGURA ---
         if self.db:            
-            self.primer_pais = None
+            # CASO A: Partida Nueva (Acabas de borrar la DB o es la primera vez)
             self.dataframe = self.csv.cargar_df()
+                        
+            # --- FIX: CREAR HISTORIAL VACÍO ---
+            # Antes faltaba esta línea, por eso fallaba al decir 'object has no attribute historial'
+            self.historial = self.csv.historial() 
+                        
+            self.primer_pais = None 
+            
         else:
+        # CASO B: Cargar Partida Existente (Guinea sigue viva aquí)
             self.dataframe = self.csv.cargar_db()
             self.historial = self.csv.historial()
-            
-            # Si cargamos partida, intentamos recuperar el día donde nos quedamos
+                        
+            # Recuperar día guardado
             if not self.historial.empty:
-                try:
-                    self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
-                except:
-                    self.dia_simulacion = 1
+                try: self.dia_simulacion = int(self.historial.iloc[-1]["dia"])
+                except: self.dia_simulacion = 1
+                    
+        # --- LÓGICA DE NOMBRE (Ahora ya es seguro ejecutar esto) ---
+        # 1. Si hay historial (partida cargada), respetamos el país original
+        if not self.historial.empty and "Primer_pais" in self.historial.columns:
+            val = self.historial["Primer_pais"].iloc[0]
+            self.primer_pais = val if val else "Desconocido"
+        else:
 
-            if not self.historial.empty and "Primer_pais" in self.historial.columns:
-                self.primer_pais = self.historial["Primer_pais"].iloc[0]
+            # 2. Si NO hay historial (partida nueva), usamos tu configuración de options.py
+            nombre_target = self.opt.PAIS_INICIO
+            # Verificamos si existe en la columna de nombres del DF
+            if nombre_target in self.dataframe["Country Name"].values:
+                self.primer_pais = nombre_target
             else:
-                self.primer_pais = "Desconocido"
-
+                self.primer_pais = "Desconocido (Error Nombre)"
+            
+        # Cargar mapa y modelo...
         self.mapa = self.csv.cargar_mapa(self.dataframe)
         self.sir = SIR(mapa_mundo=self.mapa, df=self.dataframe, opt=self.opt)
-        
-        # Precarga de vecinos del paciente cero (Optimización)
+                    
+        # Precarga de vecinos (igual que antes)
         if self.primer_pais and self.primer_pais != "Desconocido":
             vecinos = self.sir.buscar_vecinos(self.primer_pais)
             self.indices_vecinos_zona_cero = np.array(vecinos) if vecinos else np.array([])
@@ -106,34 +132,33 @@ class Engine():
         # Si no hay infectados Y NADIE ha muerto ni se ha recuperado (Inicio virgen)
         if infectados_totales == 0 and historia_pandemia == 0:
             print("☣️ Paciente Cero detectado.")
-            self.sir.infectar_primera_vez()
-            
-            pais_idx = self.opt.INDEX_PAIS_A_INFECTAR
-            if pais_idx in self.dataframe.index:
-                self.primer_pais = self.dataframe.loc[pais_idx, "Country Name"]
-            else:
-                self.primer_pais = "Desconocido"
-            
-            # Reiniciar día si empezamos de cero
+            self.sir.infectar_primera_vez()                
+            self.primer_pais = self.opt.PAIS_INICIO
+                        
             self.dia_simulacion = 1
             self.db = False 
-            
-            # Recalculamos para que el status no dé "Humanos Ganan" en este mismo tick
+                        
             infectados_totales = self.dataframe["I"].sum()
 
-        # =================================================================
-        # 3. VERIFICAR ESTADO DEL JUEGO
-        # =================================================================
+    # =================================================================
+    # 3. VERIFICAR ESTADO DEL JUEGO
+    # =================================================================
+
         status = "Jugando"
 
-        if poblacion_total == 0:
-            status = "Cargando..."
-        elif sanos_totales <= 0:
-            status = "Virus Gana"
-        elif infectados_totales <= 0 and historia_pandemia > 0:
-            # Solo ganan los humanos si hubo virus alguna vez y se extinguió
-            status = "Humanos Ganan"
+    # Lógica de conteo de días sin virus
+        if infectados_totales == 0 and historia_pandemia > 0:
+            self.dias_consecutivos_cero += 1
+        else:
+            self.dias_consecutivos_cero = 0 # Reiniciar si alguien se infecta
 
+    # CONDICIONES DE VICTORIA/DERROTA
+        if sanos_totales <= 0 and infectados_totales <= 0:
+            status = "Extinción Total" # Todos murieron
+        elif self.dias_consecutivos_cero >= 3:
+            status = "Virus Erradicado" # Fin normal
+
+        
         # Si el juego terminó, devolvemos resultado final inmediatamente
         if status != "Jugando":
             return {
@@ -147,21 +172,8 @@ class Engine():
                     "M": int(self.dataframe["M"].sum())
                 }
             }
-
-        # =================================================================
-        # 4. EXPANSIÓN (Vecinos y Viajes)
-        # =================================================================
-        if self.primer_pais:
-            idx_zona_cero = self.opt.INDEX_PAIS_A_INFECTAR
-            if idx_zona_cero in self.dataframe.index:
-                if self.dataframe.at[idx_zona_cero, "I"] > self.opt.UMBRAL_INFECCION_EXTERNO:
-                    vecinos = self.indices_vecinos_zona_cero
-                    if len(vecinos) > 0:
-                        dados = np.random.random(len(vecinos))
-                        vecinos_a_infectar = vecinos[dados < self.opt.p_frontera]
-                        self.sir.infectar_multiples(vecinos_a_infectar)
-
-
+            
+        self.sir.procesar_fronteras_inteligente()
         self.sir.actualizar_cooldowns()
                 
         if "vuelo" in self.dataframe.columns:
@@ -178,8 +190,9 @@ class Engine():
         
         try:
             self.csv.guardar_estados(resultado, self.primer_pais)
-        except:
-            pass 
+        except Exception as e:
+            print(e)
+             
 
         return {
             "status": "PLAYING",
@@ -192,6 +205,57 @@ class Engine():
             },
             "datos": resultado.to_dict(orient="records")
         }
+
+
+
+    def cheat_fin_rapido(self):
+        """
+        Versión BLINDADA contra números negativos.
+        Usa float64 para los cálculos intermedios para evitar el límite de 32 bits.
+        """
+        
+        # 1. Convertimos a NUMPY ARRAYS de tipo FLOAT64 (Decimales de alta precisión)
+        # Esto evita que Pandas intente usar enteros de 32 bits.
+        sanos = self.dataframe["S"].to_numpy(dtype=np.float64)
+        infectados = self.dataframe["I"].to_numpy(dtype=np.float64)
+        recuperados = self.dataframe["R"].to_numpy(dtype=np.float64)
+        muertos = self.dataframe["M"].to_numpy(dtype=np.float64)
+
+        # 2. Generamos aleatoriedad
+        rng = np.random.default_rng()
+        factores_suerte = rng.random(len(sanos)) # Array de 0.0 a 1.0
+        
+        # 3. Cálculo Seguro (Matemática de Flotantes)
+        nuevos_r_float = sanos * factores_suerte
+        nuevos_m_float = sanos - nuevos_r_float
+        
+        # 4. Convertimos a INT64 (Enteros Gigantes) explícitamente
+        # np.floor redondea hacia abajo para evitar decimales sueltos
+        nuevos_r = np.floor(nuevos_r_float).astype(np.int64)
+        nuevos_m = np.floor(nuevos_m_float).astype(np.int64)
+        
+        # Sumamos los infectados a los muertos (convertidos a int64)
+        nuevos_m += infectados.astype(np.int64)
+        
+        # 5. Escribimos de vuelta al DataFrame forzando el tipo
+        self.dataframe["S"] = 0
+        self.dataframe["I"] = 0
+        
+        # Suma final segura
+        total_r = recuperados.astype(np.int64) + nuevos_r
+        total_m = muertos.astype(np.int64) + nuevos_m
+        
+        self.dataframe["R"] = total_r
+        self.dataframe["M"] = total_m
+        
+        # Aseguramos que las columnas en Pandas sean int64
+        self.dataframe["R"] = self.dataframe["R"].astype('int64')
+        self.dataframe["M"] = self.dataframe["M"].astype('int64')
+
+        # Fin del juego
+        self.dias_consecutivos_cero = 5 
+        
+        return self.dataframe
 
 --- FIN DE ARCHIVO: backend/engine.py ---
 
@@ -211,15 +275,34 @@ class SIR:
         self._mascara_vuelos = self.df["vuelo"].astype(str).str.lower().str.contains(filtro)
         self._mascara_puertos = self.df["puerto"].astype(str).str.lower().str.contains(filtro)
 
+
+
     def infectar_primera_vez(self):
         infectados_iniciales = self.opt.INFECTADOS_INICIALES
-        paciente_cero_index = self.opt.INDEX_PAIS_A_INFECTAR
         
+        # --- CAMBIO: BÚSQUEDA POR NOMBRE ---
+        nombre_objetivo = self.opt.PAIS_INICIO
+        
+        # Buscamos el índice en el mapa (O(1) - Muy rápido)
+        paciente_cero_index = self.mapa_mundo.get(nombre_objetivo)
+        
+        # Blindaje: Si escribiste mal el nombre, usamos el primer país disponible
+        if paciente_cero_index is None:
+            print(f"⚠️ ERROR CRÍTICO: No encuentro el país '{nombre_objetivo}' en la base de datos.")
+            print("➡️ Usando el primer país de la lista como fallback.")
+            paciente_cero_index = self.df.index[0]
+            # Opcional: Actualizar el nombre en opciones para que la UI lo sepa
+            self.opt.PAIS_INICIO = self.df.at[paciente_cero_index, "Country Name"]
+        
+        # El resto sigue igual...
         poblacion_pais = self.df.loc[paciente_cero_index, "poblacion"]
         infectados_reales = min(infectados_iniciales, poblacion_pais)
         
         self.df.loc[paciente_cero_index,"S"] -= infectados_reales
         self.df.loc[paciente_cero_index,"I"] += infectados_reales
+        
+
+
 
     def actualizar_cooldowns(self):
         """Resta 1 día al contador de espera de todos los países"""
@@ -267,9 +350,15 @@ class SIR:
             # (Optimizacion: self.mapa_mundo es un dict {"Nombre": Indice})
             vecinos_indices = []
             for nombre in lista_vecinos_nombres:
-                idx = self.mapa_mundo.get(nombre)
-                if idx is not None:
-                    vecinos_indices.append(idx)
+                 # --- FIX: Ignorar si dice "Ninguno" o "No" ---
+                 if "Ninguno" in nombre or nombre == "No": continue
+                 
+                 idx = self.mapa_mundo.get(nombre)
+                 if idx is None:
+                    # print(f"⚠️ ALERTA: No encuentro el país vecino '{nombre}' en el mapa.") # Opcional: comentar el print
+                    continue
+                 
+                 vecinos_indices.append(idx)
             
             if not vecinos_indices: continue
 
@@ -513,7 +602,7 @@ class Loader:
         if "poblacion" in df.columns:
             if df["poblacion"].dtype == 'object':
                 df["poblacion"] = df["poblacion"].astype(str).str.replace(",", "")
-            df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce').fillna(0).astype(int)
+            df["poblacion"] = pd.to_numeric(df["poblacion"], errors='coerce').fillna(0).astype('int64')
             df = df[df["poblacion"] > 0] # Eliminar países sin gente
         
         if "Country Name" in df.columns:
@@ -522,7 +611,7 @@ class Loader:
         df = self._reparar_columnas(df)
 
         # Inicialización de Modelo
-        df["S"] = df["poblacion"]
+        df["S"] = df["poblacion"].astype("int64")
         df["I"] = 0
         df["R"] = 0
         df["M"] = 0
@@ -562,7 +651,8 @@ class Loader:
             df = pd.read_sql("SELECT * FROM historial", conn)
             conn.close()
             return df
-        except:
+        except Exception as e:
+            print(e)
             return pd.DataFrame()
         
     def crear_db(self):
@@ -622,12 +712,17 @@ class Loader:
                 if not res.empty: ultimo_dia = int(res.iloc[0, 0])
             except: pass
             
+            # CONVERSIÓN EXPLÍCITA A FLOAT PARA EVITAR OVERFLOW EN 32 BITS
             dicc = {
-                "total_S": datos["S"].sum(), "total_R": datos["R"].sum(),            
-                "total_I": datos["I"].sum(), "total_M": datos["M"].sum(),
-                "dia": ultimo_dia + 1, "Primer_pais": pais,
-                "Paises_Infectados": (datos["I"] > 0).sum()
+                "total_S": float(datos["S"].astype(float).sum()), 
+                "total_R": float(datos["R"].astype(float).sum()),            
+                "total_I": float(datos["I"].astype(float).sum()), 
+                "total_M": float(datos["M"].astype(float).sum()),
+                "dia": ultimo_dia + 1, 
+                "Primer_pais": pais,
+                "Paises_Infectados": int((datos["I"] > 0).sum())
             }
+            
             pd.DataFrame([dicc]).to_sql("historial", conn, if_exists="append", index=False)         
             datos.to_sql("estado_actual", conn, if_exists="replace", index=False)         
             conn.close()
@@ -648,32 +743,29 @@ class Loader:
 --- INICIO DE ARCHIVO: backend/options.py ---
 from PySide6.QtCore import QObject, Signal, Property
 import os
+import json
 
 class Options(QObject):
     # =========================================================
-    # 1. CONSTANTES DE RUTA (Arreglado para carpeta 'backend')
+    # 1. CONSTANTES Y RUTAS
     # =========================================================
-    
-    # Obtenemos la ruta absoluta de la carpeta donde está ESTE archivo (backend/)
     _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-    
-    # Construimos las rutas apuntando a la carpeta 'data' dentro de 'backend'
     RUTA_DB_CREADA = os.path.join(_BACKEND_DIR, "data", "mundo.db")
     RUTA_CSV = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
+    
+    # NUEVO: Archivo para guardar tus preferencias
+    RUTA_CONFIG = os.path.join(_BACKEND_DIR, "data", "config.json")
 
-    # Constantes fijas del juego
-    INDEX_PAIS_A_INFECTAR = 88
+    # Constantes fijas de juego
     INFECTADOS_INICIALES = 2
-    INFECTADOS_INICIALES_VECINOS = 11 # Mayor a umbral de erradicacion siempre
+    INFECTADOS_INICIALES_VECINOS = 11
     UMBRAL_INFECCION_EXTERNO = 500
     UMBRAL_ERRADICACION = 10
-
-    # El porcentaje de población infectada necesario para que salgan aviones/barcos (0.4 = 40%)
+    MAX_NOTICIAS_HISTORIAL = 50 
     UMBRAL_PCT_TRANSPORTE = 0.40 
-    # Días de espera antes de poder volver a infectar por este medio
     DIAS_COOLDOWN_TRANSPORTE = 3
-    UMBRAL_PCT_FRONTERA = 0.05   # 20% de infectados para cruzar a pie
-    DIAS_COOLDOWN_FRONTERA = 2   # Espera entre contagios vecinales
+    UMBRAL_PCT_FRONTERA = 0.05   
+    DIAS_COOLDOWN_FRONTERA = 2   
 
     # =========================================================
     # 2. SEÑALES
@@ -682,76 +774,120 @@ class Options(QObject):
     gammaChanged = Signal(float)
     muChanged = Signal(float)
     pFronteraChanged = Signal(float)
+    virusNombreChanged = Signal(str)
+    paisInicioChanged = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Debug: Imprimimos la ruta para que verifiques en consola
-        print(f"📁 BUSCANDO DATOS EN: {self.RUTA_CSV}")
-
-        # =====================================================
-        # 3. VARIABLES DINÁMICAS
-        # =====================================================
+        # Valores por defecto
         self._beta = 0.5
         self._gamma = 0.02
         self._mu = 0.005
         self._p_frontera = 1.0
+        self._nombre_virus = "Paper-20"
+        self._pais_inicio = "Venezuela"
         
-        # Probabilidades extra
         self.PROBABILIDAD_INFECTAR_VUELO = 1.0
         self.PROBABILIDAD_INFECTAR_PUERTO = 1.0
 
-    # --- GETTERS Y SETTERS ---
+        # CARGAR CONFIGURACIÓN GUARDADA AL INICIAR
+        self.cargar_config()
+
+    # --- SISTEMA DE GUARDADO/CARGA (NUEVO) ---
+    def cargar_config(self):
+        if os.path.exists(self.RUTA_CONFIG):
+            try:
+                with open(self.RUTA_CONFIG, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Solo cargamos si existen las claves
+                    self._nombre_virus = data.get("nombre_virus", "Paper-20")
+                    self._pais_inicio = data.get("pais_inicio", "Venezuela")
+                    print("📂 Configuración cargada exitosamente.")
+            except Exception as e:
+                print(f"⚠️ Error cargando config: {e}")
+
+    def guardar_config(self):
+        data = {
+            "nombre_virus": self._nombre_virus,
+            "pais_inicio": self._pais_inicio
+        }
+        try:
+            with open(self.RUTA_CONFIG, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Error guardando config: {e}")
+
+    # --- GETTERS Y SETTERS CON AUTO-GUARDADO ---
+
+    @Property(str, notify=virusNombreChanged)
+    def NOMBRE_VIRUS(self): return self._nombre_virus
+
+    @NOMBRE_VIRUS.setter
+    def NOMBRE_VIRUS(self, val):
+        if self._nombre_virus != val:
+            self._nombre_virus = val
+            self.guardar_config() # <--- Guardamos al cambiar
+            self.virusNombreChanged.emit(val)
+
+    @Property(str, notify=paisInicioChanged)
+    def PAIS_INICIO(self): return self._pais_inicio
+
+    @PAIS_INICIO.setter
+    def PAIS_INICIO(self, val):
+        if self._pais_inicio != val:
+            self._pais_inicio = val
+            self.guardar_config() # <--- Guardamos al cambiar
+            self.paisInicioChanged.emit(val)
+
+    # (El resto de propiedades numéricas se mantienen igual, 
+    #  puedes agregarlas al save_config si quieres que también se guarden)
     @Property(float, notify=betaChanged)
     def beta(self): return self._beta
-
     @beta.setter
     def beta(self, val):
-        if self._beta != val:
-            self._beta = val
-            self.betaChanged.emit(val)
+        if self._beta != val: self._beta = val; self.betaChanged.emit(val)
 
     @Property(float, notify=gammaChanged)
     def gamma(self): return self._gamma
-
     @gamma.setter
     def gamma(self, val):
-        if self._gamma != val:
-            self._gamma = val
-            self.gammaChanged.emit(val)
+        if self._gamma != val: self._gamma = val; self.gammaChanged.emit(val)
 
     @Property(float, notify=muChanged)
     def mu(self): return self._mu
-
     @mu.setter
     def mu(self, val):
-        if self._mu != val:
-            self._mu = val
-            self.muChanged.emit(val)
+        if self._mu != val: self._mu = val; self.muChanged.emit(val)
 
     @Property(float, notify=pFronteraChanged)
     def p_frontera(self): return self._p_frontera
-
     @p_frontera.setter
     def p_frontera(self, val):
-        if self._p_frontera != val:
-            self._p_frontera = val
-            self.pFronteraChanged.emit(val)
+        if self._p_frontera != val: self._p_frontera = val; self.pFronteraChanged.emit(val)
 
 --- FIN DE ARCHIVO: backend/options.py ---
 
 --- INICIO DE ARCHIVO: controllers/sird_controller.py ---
-from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer
+from PySide6.QtCore import QObject, Slot, Signal, Property, QTimer, QUrl
 from backend.engine import Engine
 from controllers.mapa_modelo import MapaModeloSIRD
 from backend.options import Options
+from collections import deque
+import random
+import os
+import datetime
+import pandas as pd
 
 class ControladorSIRD(QObject):
     # Señales
     datosCambios = Signal()
     noticiaCambio = Signal(str)
     statsChanged = Signal() 
-    diaChanged = Signal(str) 
+    diaChanged = Signal(str)
+    gameOver = Signal('QVariantMap')
+    noticiasActualizadas = Signal() 
+
 
     def __init__(self):
         super().__init__()
@@ -762,21 +898,32 @@ class ControladorSIRD(QObject):
         self.motor = Engine(self.opciones) # Pasamos opciones al motor
 
         # 2. Variables de estado
-        self._dia = "Día 1"
+        self._dia = "1"
         self._sanos = 0
         self._infectados = 0
         self._recuperados = 0
         self._muertos = 0
         self._paisesInfectados = 0
+        self._primerPais = "Esperando..."
         self._noticia = "Preparado. Pulsa Play."
         
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick_simulacion)
         self.isPlaying = False
+        self._intervalo_ms = 1000
 
         # 3. ¡IMPORTANTE! Cargar datos iniciales (para no ver ceros)
         # Ejecutamos una actualización manual sin avanzar el tiempo
         self.actualizar_interfaz_desde_motor()
+
+        self.noticias_data = deque(maxlen=self.opciones.MAX_NOTICIAS_HISTORIAL)
+        
+        # MEMORIA 1: Países infectados (Se borra y actualiza cada tick)
+        self.paises_infectados_set = set() 
+        
+        # [cite_start]MEMORIA 2: Hitos/Logros (NUEVO - Esto persiste para siempre) [cite: 98]
+        self.hitos_reportados = set()
+        
 
     @Property(QObject, constant=True)
     def config(self):
@@ -798,11 +945,57 @@ class ControladorSIRD(QObject):
     @Property(int, notify=statsChanged)
     def paisesInfectados(self): return self._paisesInfectados
 
+    @Property(str, notify=statsChanged)
+    def primerPais(self): return self._primerPais
+
     @Property(str, notify=diaChanged)
     def dia(self): return str(self._dia)
 
     @Property(str, notify=noticiaCambio)
     def noticia(self): return self._noticia
+
+    @Property(list, constant=True)
+    def listaNombresPaises(self):
+        """Devuelve la lista alfabética de países para el ComboBox"""
+        if hasattr(self.motor, 'dataframe') and not self.motor.dataframe.empty:
+            # Obtenemos nombres únicos y los ordenamos
+            lista = sorted(self.motor.dataframe["Country Name"].unique().tolist())
+            return lista
+        return ["Cargando..."]
+
+
+    @Slot(float)
+    def cambiar_velocidad(self, valor):
+        """
+        Recibe valor del slider (0.0 a 2.0)
+        Convierte a milisegundos (4000ms a 200ms)
+        """
+        # TUS LÍMITES
+        ms_min = 200     # Lo más rápido (límite del hardware)
+        ms_max = 4000    # Lo más lento
+        slider_max = 2.0 # El valor 'maximo' que pusiste en el QML
+
+        # 1. Normalizamos: Convertimos el 0..2.0 a 0..1.0
+        # Ejemplo: si entra 2.0, factor será 1.0. Si entra 1.0, factor será 0.5
+        factor = valor / slider_max 
+        
+        # 2. Interpolación Lineal Inversa
+        # Intervalo = Inicio + (Fin - Inicio) * factor
+        # Pero como queremos ir de Mayor a Menor, restamos:
+        rango = ms_max - ms_min
+        nuevo_intervalo = int(ms_max - (factor * rango))
+        
+        # 3. Seguridad: Nunca bajar del mínimo del hardware
+        nuevo_intervalo = max(ms_min, nuevo_intervalo)
+        
+        self._intervalo_ms = nuevo_intervalo
+        
+        # Debug para verificar
+        print(f"🏎️ Slider: {valor:.2f} -> Intervalo Real: {self._intervalo_ms} ms")
+
+        # Aplicar inmediatamente si está corriendo
+        if self.isPlaying:
+            self.timer.setInterval(self._intervalo_ms)
 
     # --- LÓGICA ---
     @Slot(bool)
@@ -810,7 +1003,7 @@ class ControladorSIRD(QObject):
         self.isPlaying = encendido
         if encendido:
             print("▶️ Iniciando Timer...")
-            self.timer.start(1700)
+            self.timer.start(self._intervalo_ms)
         else:
             print("⏸️ Pausando Timer...")
             self.timer.stop()
@@ -822,6 +1015,7 @@ class ControladorSIRD(QObject):
     @Slot()
     def reiniciar_simulacion(self):
         self.reiniciar()
+    
 
     @Slot()
     def reiniciar(self):
@@ -836,6 +1030,10 @@ class ControladorSIRD(QObject):
 
         self.mapa_modelo._inicializar_vacio()
         self.motor = Engine(self.opciones) # Motor nuevo con opciones
+
+        self.paises_infectados_set = set()
+        self.hitos_reportados = set()      # <--- AÑADIR ESTO [cite: 109, 110]
+        self.noticias_data.clear()
 
         self._noticia = "Simulación Reiniciada."
         
@@ -855,6 +1053,19 @@ class ControladorSIRD(QObject):
         if hasattr(self.motor, 'dataframe'):
              # Construimos un 'resultado' falso solo para actualizar la UI
              df = self.motor.dataframe
+             nombre = getattr(self.motor, 'primer_pais', "Desconocido")
+
+             
+             if not nombre or nombre == "Desconocido":
+                 # INTENTO DE RESCATE: Si el motor no sabe, miramos si alguien tiene infectados
+                 infectados = df[df["I"] > 0]
+                 if not infectados.empty:
+                     nombre = infectados.iloc[0]["Country Name"]
+                 else:
+                     nombre = self.opciones.PAIS_INICIO
+                         
+             self._primerPais = str(nombre) if nombre else "Desconocido"
+             
              totales = {
                  "S": int(df["S"].sum()),
                  "I": int(df["I"].sum()),
@@ -866,7 +1077,7 @@ class ControladorSIRD(QObject):
              self._infectados = totales["I"]
              self._recuperados = totales["R"]
              self._muertos = totales["M"]
-             self._dia = "Día 1"
+             self._dia = "1"
              self.statsChanged.emit()
              self.diaChanged.emit(self._dia)
              self.noticiaCambio.emit(self._noticia)
@@ -876,27 +1087,309 @@ class ControladorSIRD(QObject):
 
     def procesar_resultado(self, resultado):
         status = resultado.get("status", "Jugando")
-        
         datos = resultado.get("datos", [])
+                
+        # --- LÓGICA DE NOTICIAS BLINDADA ---
+        try:
+            df = self.motor.dataframe
+            virus = getattr(self.opciones, "NOMBRE_VIRUS", "Virus-X") 
+            
+            # 1. DETECTAR NUEVOS PAÍSES INFECTADOS
+            infectados_ahora = set(df[df["I"] > 0]["Country Name"].tolist())
+            nuevos = infectados_ahora - self.paises_infectados_set
+            
+            for pais_nombre in nuevos:
+                culpable = "Desconocido"
+                        
+                # Solo buscamos culpable si YA había infectados antes
+                # Y usamos la lista LIMPIA (solo países reales)
+                if len(self.paises_infectados_set) > 0:
+                    lista_previos = list(self.paises_infectados_set)
+                    if lista_previos:
+                        culpable = random.choice(lista_previos)
+                        frases = [
+                            f"¡{virus} llegó a {pais_nombre} desde {culpable}!",
+                            f"Frontera rota: {culpable} contagió a {pais_nombre}.",
+                            f"Turistas de {culpable} llevan el virus a {pais_nombre}.",
+                            f"Detectado caso en {pais_nombre}. Origen: {culpable}."
+                        ]
+                        msg = random.choice(frases)
+                    else:
+                            msg = f"¡{virus} aparece en {pais_nombre}!"
+                else:
+                    msg = f"☣️ ¡PACIENTE CERO detectado en {pais_nombre}!"
+            
+                self.generar_noticia(msg, "INFECT")
+            
+            # Actualizamos la lista de países (Esto borraba el 1M_INF antes)
+            self.paises_infectados_set = infectados_ahora
+                    
+            # 2. HITOS GLOBALES (Usamos la NUEVA memoria separada)
+            # Hito: 1 Millón
+            if self._infectados > 1000000 and "1M_INF" not in self.hitos_reportados:
+                self.generar_noticia(f"¡El mundo supera 1 Millón de infectados!", "INFO")
+                self.hitos_reportados.add("1M_INF") # Guardamos en la memoria segura
+            
+            # Hito: 100 Millones
+            if self._infectados > 100000000 and "100M_INF" not in self.hitos_reportados:
+                self.generar_noticia(f"¡CATASTROFE: 100 Millones de infectados!", "DEATH")
+                self.hitos_reportados.add("100M_INF")
+            
+            # Hito: 50% Población Mundial (aprox 4 billones)
+            if self._infectados > 4000000000 and "HALF_WORLD" not in self.hitos_reportados:
+                self.generar_noticia(f"¡La mitad de la humanidad ha contraído {virus}!", "DEATH")
+                self.hitos_reportados.add("HALF_WORLD")
+            
+        except Exception as e:
+            print(f"⚠️ Error generando noticia: {e}")
+                    
+                        
+        # --- FIN LÓGICA NOTICIAS ---
+                
         if datos: self.mapa_modelo.actualizar_datos(datos)
-
+                
         totales = resultado.get("totales", {})
         if totales:
             self._sanos = int(totales.get("S", 0))
             self._infectados = int(totales.get("I", 0))
             self._recuperados = int(totales.get("R", 0))
             self._muertos = int(totales.get("M", 0))
+                
+            self._dia = str(resultado.get("dia", self._dia))
+            self._paisesInfectados = sum(1 for p in datos if p.get("I", 0) > 0)
+                
+            self.statsChanged.emit()
+            self.diaChanged.emit(self._dia)
+                
+            if status != "PLAYING" and status != "Jugando":
+                self.pausar_simulacion()
+                self._noticia = f"🏁 FIN: {status}"
+                self.noticiaCambio.emit(self._noticia)
+                            
+                self.gameOver.emit({
+                    "titulo": status,
+                    "dia": self._dia,
+                    "sanos": float(self._sanos),
+                    "recuperados": float(self._recuperados),
+                    "muertos": float(self._muertos),
+                    "paises_afectados": int(self._paisesInfectados)
+                })
 
-        self._dia = str(resultado.get("dia", self._dia))
-        self._paisesInfectados = sum(1 for p in datos if p.get("I", 0) > 0)
 
-        self.statsChanged.emit()
-        self.diaChanged.emit(self._dia)
+    @Slot(result=list)
+    def obtener_datos_historial(self):
+        """
+        Devuelve una lista de 5 listas: [Dias, S, I, R, M]
+        Optimizado para graficar rápido.
+        """
+        if not hasattr(self.motor, 'historial'): return []
+        
+        # Obtenemos el DataFrame del historial
+        # Si está vacío, intentamos recargar de la DB
+        df = self.motor.historial
+        if df.empty:
+             df = self.motor.csv.historial()
+        
+        if df.empty: return []
 
-        if status != "PLAYING" and status != "Jugando":
-            self.pausar_simulacion()
-            self._noticia = f"🏁 FIN: {status}"
-            self.noticiaCambio.emit(self._noticia)
+        # Extraemos columnas como listas simples de Python (JSON compatible)
+        # Aseguramos que estén ordenados por día
+        try:
+            # Convertir a numérico por seguridad
+            dias = df["dia"].astype(int).tolist()
+            s = df["total_S"].astype(float).tolist()
+            i = df["total_I"].astype(float).tolist()
+            r = df["total_R"].astype(float).tolist()
+            m = df["total_M"].astype(float).tolist()
+            
+            return [dias, s, i, r, m]
+        except Exception as e:
+            print(f"Error extrayendo historial: {e}")
+            return []
+
+    @Slot(str, result=list)
+    def obtener_ranking_global(self, criterio="I"):
+        """
+        Devuelve el ranking ordenado según el criterio:
+        'I': Infectados, 'M': Muertos, 'R': Recuperados, 'S': Sanos
+        """
+        if not hasattr(self.motor, 'dataframe'): return []
+        
+        df = self.motor.dataframe.copy()
+        
+        # Evitar división por cero
+        df["poblacion"] = df["poblacion"].replace(0, 1)
+        
+        # Seleccionamos la columna clave para ordenar
+        col_sort = "I"
+        if criterio == "M": col_sort = "M"
+        elif criterio == "R": col_sort = "R"
+        elif criterio == "S": col_sort = "S"
+        
+        # Calculamos el ratio específico para la barra de progreso
+        df["ratio"] = df[col_sort] / df["poblacion"]
+        
+        # Ordenamos de Mayor a Menor
+        df_sorted = df.sort_values(by=col_sort, ascending=False)
+        
+        # Extraemos Top 200
+        resultado = []
+        for index, row in df_sorted.iterrows():
+            # Filtro visual: Si el valor es 0, quizás no queramos mostrarlo (opcional)
+            # Pero para Sanos siempre habrá, así que lo dejamos pasar.
+            
+            resultado.append({
+                "nombre": str(row["Country Name"]),
+                "codigo": str(row.get("Country Code", "???")),
+                "poblacion": int(row["poblacion"]),
+                "valor": int(row[col_sort]), # El valor principal (ej. Muertos)
+                "ratio": float(row["ratio"]), # Para la barra (0.0 a 1.0)
+                "infectados": int(row["I"]),    # Datos extra por si acaso
+                "muertos": int(row["M"]),
+                "recuperados": int(row["R"]),
+                "sanos": int(row["S"])
+            })
+                
+        return resultado
+
+    @Slot(str, result='QVariantMap')
+    def obtener_detalle_pais(self, codigo_pais):
+        """
+        Calcula todos los datos necesarios para la gráfica de pastel en Python.
+        Retorna un diccionario listo para QML.
+        """
+        # Buscamos en el modelo de mapa (que ya tiene los datos frescos del último tick)
+        datos = next((p for p in self.mapa_modelo.paises if p["codigo"] == codigo_pais), None)
+        
+        if not datos:
+            return {"existe": False}
+            
+        pob = datos["poblacion"]
+        i = datos["infectado"]
+        r = datos["recuperado"]
+        m = datos.get("muerto", 0) # Asegurar que existe
+        
+        # Matemáticas aquí, no en QML
+        s = pob - i - r - m
+        if s < 0: s = 0 # Corrección de seguridad
+        
+        return {
+            "existe": True,
+            "nombre": datos["nombre"],
+            "poblacion": pob,
+            "valS": s,
+            "valI": i,
+            "valR": r,
+            "valM": m,
+            # Pre-calculamos porcentajes para tooltips (ahorramos JS)
+            "pctS": (s/pob)*100,
+            "pctI": (i/pob)*100,
+            "pctR": (r/pob)*100,
+            "pctM": (m/pob)*100
+        }
+
+
+    @Slot()
+    def activar_cheat_fin(self):
+        print("😈 CHEAT ACTIVADO: Apocalipsis instantáneo")
+        self.motor.cheat_fin_rapido()
+        
+        # 1. Actualizamos los números visuales
+        self.actualizar_interfaz_desde_motor()
+        
+        #Forzamos un avance de día MANUAL para que el motor detecte el fin
+        # Así no tienes que esperar al Timer ni darle a Play
+        resultado = self.motor.avanzar_dia()
+        self.procesar_resultado(resultado)
+
+
+    @Slot(result=list)
+    def obtener_historial_noticias(self):
+        # Convertimos el deque a lista para que QML lo entienda
+        return list(self.noticias_data)
+
+    def generar_noticia(self, mensaje, tipo="INFO"):
+        """
+        Tipos: 'INFECT' (Rojo), 'DEATH' (Negro), 'CURE' (Azul), 'INFO' (Gris)
+        """
+        item = {
+            "dia": self._dia,
+            "mensaje": mensaje,
+            "tipo": tipo
+        }
+        # Añadimos al principio (Noticia más reciente arriba)
+        self.noticias_data.appendleft(item)
+
+        # Enviamos solo el texto al ticker (barra inferior)
+        self._noticia = mensaje
+        self.noticiaCambio.emit(mensaje)
+        # Avisamos a la lista completa
+        self.noticiasActualizadas.emit()
+
+
+    @Slot(str)
+    def exportar_datos_excel(self, file_url):
+        """
+        Genera DOS archivos CSV basados en la ruta elegida por el usuario:
+        1. [Nombre]_Estado_Actual.csv (Datos por país)
+        2. [Nombre]_Historial_Global.csv (Datos temporales de la DB)
+        """
+        try:
+            if not hasattr(self.motor, 'dataframe'): return
+            
+            # 1. LIMPIEZA DE RUTA (Cross-Platform)
+            ruta_limpia = QUrl(file_url).toLocalFile()
+            
+            # Separamos nombre y extensión para insertar los sufijos
+            # Ej: "/home/user/Datos.csv" -> base="/home/user/Datos", ext=".csv"
+            base, ext = os.path.splitext(ruta_limpia)
+            if not ext: ext = ".csv" # Por si el usuario no puso extensión
+            
+            # ---------------------------------------------------------
+            # ARCHIVO 1: ESTADO ACTUAL (Tabla de Países)
+            # ---------------------------------------------------------
+            ruta_estado = f"{base}_Estado_Actual{ext}"
+            self.motor.dataframe.to_csv(ruta_estado, index=False, encoding='utf-8-sig')
+            
+            # ---------------------------------------------------------
+            # ARCHIVO 2: HISTORIAL (Tabla de Tiempo)
+            # ---------------------------------------------------------
+            ruta_historial = f"{base}_Historial_Global{ext}"
+            
+            # Intentamos obtener el historial fresco desde la base de datos
+            df_historial = pd.DataFrame()
+            try:
+                # Usamos el método que ya tienes en loader.py
+                df_historial = self.motor.csv.historial()
+            except Exception as e:
+                print(f"⚠️ Error leyendo historial DB: {e}")
+
+            if not df_historial.empty:
+                df_historial.to_csv(ruta_historial, index=False, encoding='utf-8-sig')
+                mensaje_extra = " y Historial"
+            else:
+                mensaje_extra = " (Historial vacío)"
+
+            # ---------------------------------------------------------
+            # NOTIFICACIÓN
+            # ---------------------------------------------------------
+            nombre_base = os.path.basename(base)
+            self.generar_noticia(f"💾 Guardado: {nombre_base}_Estado{ext} y {nombre_base}_Historial{ext}", "INFO")
+            
+            print(f"✅ Exportación exitosa:")
+            print(f"   📄 {ruta_estado}")
+            print(f"   📄 {ruta_historial}")
+            
+        except Exception as e:
+            self.generar_noticia("❌ Error crítico al exportar.", "DEATH")
+            print(f"Error exportando: {e}")
+
+
+    @Slot(list)
+    def cambiar_tema_mapa(self, lista_colores):
+        """Recibe ['#RRGGBB', ...] y actualiza el modelo del mapa"""
+        print(f"🎨 Cambiando paleta del mapa: {lista_colores}")
+        self.mapa_modelo.actualizar_paleta_colores(lista_colores)
 
 --- FIN DE ARCHIVO: controllers/sird_controller.py ---
 
@@ -906,18 +1399,21 @@ import json
 import os
 
 class MapaModeloSIRD(QAbstractListModel):
+    # Definimos los Roles (Variables que QML puede leer)
     CodigoRole = Qt.UserRole + 1
     NombreRole = Qt.UserRole + 2
     PathRole = Qt.UserRole + 3
     InfectadoRole = Qt.UserRole + 4
     RecuperadoRole = Qt.UserRole + 5
     ColorRole = Qt.UserRole + 6 
+    MuertoRole = Qt.UserRole + 7
+    PoblacionRole = Qt.UserRole + 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.paises = []
         
-        # Cargar geometría del mapa
+        # 1. CARGA DE GEOMETRÍA (paises.json)
         try:
             BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             json_path = os.path.join(BASE_DIR, "ui", "assets", "paises.json")
@@ -927,24 +1423,40 @@ class MapaModeloSIRD(QAbstractListModel):
             print(f"❌ Error cargando paises.json: {e}")
             self.geometria = {}
 
+        # 2. DICCIONARIO DE ALIAS (CRUCIAL: Esto arregla el "Sin datos" en islas)
+        self.alias_map = {
+            "BAK": "UMI", "GLO": "UMI", "HOW": "UMI", "JAR": "UMI", 
+            "JHN": "UMI", "JUA": "UMI", "MID": "UMI", "WAK": "UMI", 
+            "XKX": "XKX"
+        }
+
+        # 3. Paleta de colores
+        self.paleta_actual = [
+            (0.00, 162, 178, 243), # Azul
+            (0.25, 156, 39, 176),  # Morado
+            (0.50, 233, 30, 99),   # Rosa
+            (0.75, 213, 0, 0),     # Rojo
+            (1.00, 100, 0, 0)      # Rojo Oscuro
+        ]
+
         self._inicializar_vacio()
 
     def _inicializar_vacio(self):
-        """Estado inicial: Todo azul tranquilo"""
+        """Estado inicial: Todo en cero"""
         self.beginResetModel()
         self.paises = []
-        # Color base solicitado: #A2B2F3 (Azul claro)
-        for codigo, path in self.geometria.items():
+        # Ordenamos para consistencia
+        for codigo, path in sorted(self.geometria.items()):
             self.paises.append({
-                "codigo": codigo,
+                "codigo": codigo, # QML usa model.codigo
                 "nombre": codigo, 
                 "path": path,
-                "infectado": 0,
-                "recuperado": 0,
-                "poblacion": 1, 
+                "infectado": 0, "recuperado": 0, "muerto": 0, "poblacion": 1, 
                 "color": "#A2B2F3"
             })
         self.endResetModel()
+        # Diccionario rápido para búsquedas O(1)
+        self._indice_rapido = {p["codigo"]: i for i, p in enumerate(self.paises)}
 
     def roleNames(self):
         return {
@@ -953,16 +1465,16 @@ class MapaModeloSIRD(QAbstractListModel):
             self.PathRole: b"path",
             self.InfectadoRole: b"infectado",
             self.RecuperadoRole: b"recuperado",
-            self.ColorRole: b"color_pais" 
+            self.ColorRole: b"color_pais",
+            self.MuertoRole: b"muerto",      
+            self.PoblacionRole: b"poblacion"
         }
 
     def rowCount(self, parent=None):
         return len(self.paises)
 
     def data(self, index, role):
-        if not index.isValid(): return None
-        if index.row() >= len(self.paises): return None
-        
+        if not index.isValid() or index.row() >= len(self.paises): return None
         pais = self.paises[index.row()]
         
         if role == self.CodigoRole: return pais["codigo"]
@@ -971,148 +1483,167 @@ class MapaModeloSIRD(QAbstractListModel):
         if role == self.InfectadoRole: return pais["infectado"]
         if role == self.RecuperadoRole: return pais["recuperado"]
         if role == self.ColorRole: return pais["color"]
+        if role == self.MuertoRole: return pais.get("muerto", 0)
+        if role == self.PoblacionRole: return pais["poblacion"]
         return None
 
+    # --- MÉTODOS PARA TOOLTIP (Arregla el mensaje "Sin datos") ---
     @Slot(str, result=str)
     def get_datos_pais_html(self, codigo_pais):
-        for pais in self.paises:
-            if pais["codigo"] == codigo_pais:
-                pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
-                pct = (pais['infectado'] / pob) * 100
-                
-                return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
-                        f"👥 Población: {pob:,}<br>"
-                        f"🤒 Infectados: {pais['infectado']:,} ({pct:.2f}%)<br>"
-                        f"💚 Recuperados: {pais['recuperado']:,}")
+        idx = self._indice_rapido.get(codigo_pais)
+        
+        if idx is not None:
+            pais = self.paises[idx]
+            pob = pais['poblacion'] if pais['poblacion'] > 0 else 1
+            
+            # Formato de números con separador de miles
+            def fmt(n): return "{:,}".format(int(n))
+            
+            pct = ((pais['infectado'] + pais['recuperado'] + pais['muerto']) / pob) * 100
+            
+            return (f"<b>{pais['nombre']}</b> ({pais['codigo']})<br>"
+                    f"👥 Pob: {fmt(pob)}<br>"
+                    f"<span style='color:#f44336'>■ Inf: {fmt(pais['infectado'])}</span><br>"
+                    f"<span style='color:#2196f3'>■ Rec: {fmt(pais['recuperado'])}</span><br>"
+                    f"<span style='color:#9e9e9e'>■ Mue: {fmt(pais['muerto'])}</span>")
+        
         return "Sin datos"
 
-    # =========================================================
-    # MOTOR DE COLORES
-    # =========================================================
-    def calcular_color_hex(self, porcentaje):
-        # porcentaje de 0.0 a 1.0
-        stops = [
-            (0.00, 162, 178, 243), # Azul Base
-            (0.05, 156, 39, 176),  # Morado (Inicio)
-            (0.20, 233, 30, 99),   # Rosa (Grave)
-            (0.50, 213, 0, 0),     # Rojo (Crítico)
-            (1.00, 100, 0, 0)      # Rojo Oscuro (Apocalipsis)
-        ]
+    # --- LÓGICA DE ACTUALIZACIÓN (Con Alias) ---
+    def actualizar_datos(self, lista_paises):
+        if not self.paises or not lista_paises: return
+        
+        # Diccionario del Backend
+        datos_dict = { fila["Country Code"]: fila for fila in lista_paises if "Country Code" in fila }
+        
+        hay_cambios = False
+        idx_min, idx_max = len(self.paises), 0
 
+        for i, pais in enumerate(self.paises):
+            codigo_mapa = pais["codigo"]
+            
+            # TRADUCCIÓN: Si el mapa dice "BAK", buscamos "UMI" en el CSV
+            codigo_busqueda = self.alias_map.get(codigo_mapa, codigo_mapa)
+            
+            if codigo_busqueda in datos_dict:
+                dato = datos_dict[codigo_busqueda]
+                
+                i_val = int(dato.get("I", 0))
+                r_val = int(dato.get("R", 0))
+                m_val = int(dato.get("M", 0))
+                pob = int(dato.get("S", 0)) + i_val + r_val + m_val
+                
+                if pob <= 0: pob = 1
+                pais["poblacion"] = pob
+                pais["infectado"] = i_val
+                pais["recuperado"] = r_val
+                pais["muerto"] = m_val
+                
+                if "Country Name" in dato:
+                    pais["nombre"] = dato["Country Name"]
+                
+                # Calcular Color
+                pct = (i_val + r_val + m_val) / pob
+                nuevo_color = self.calcular_color_hex(pct)
+                
+                if pais["color"] != nuevo_color:
+                    pais["color"] = nuevo_color
+                    hay_cambios = True
+                    idx_min = min(idx_min, i)
+                    idx_max = max(idx_max, i)
+
+        if hay_cambios:
+            top = self.index(idx_min, 0)
+            bot = self.index(idx_max, 0)
+            self.dataChanged.emit(top, bot, [self.ColorRole, self.InfectadoRole, self.RecuperadoRole])
+
+    # --- UTILIDADES DE COLOR (Para los Temas) ---
+    def _hex_to_rgb(self, hex_color):
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+    def calcular_color_hex(self, porcentaje):
+        stops = self.paleta_actual
         for i in range(len(stops) - 1):
             t1, r1, g1, b1 = stops[i]
             t2, r2, g2, b2 = stops[i+1]
-
             if porcentaje <= t2:
-                factor = (porcentaje - t1) / (t2 - t1)
+                dist = t2 - t1
+                if dist == 0: return f"#{r1:02x}{g1:02x}{b1:02x}"
+                factor = (porcentaje - t1) / dist
                 r = int(r1 + (r2 - r1) * factor)
                 g = int(g1 + (g2 - g1) * factor)
                 b = int(b1 + (b2 - b1) * factor)
                 return f"#{r:02x}{g:02x}{b:02x}"
+        _, lr, lg, lb = stops[-1]
+        return f"#{lr:02x}{lg:02x}{lb:02x}"
+
+    def actualizar_paleta_colores(self, lista_hex):
+        if len(lista_hex) != 5: return
+        nuevos_stops = []
+        pasos = [0.00, 0.25, 0.50, 0.75, 1.00]
+        for i, hex_code in enumerate(lista_hex):
+            r, g, b = self._hex_to_rgb(hex_code)
+            nuevos_stops.append((pasos[i], r, g, b))
+        self.paleta_actual = nuevos_stops
         
-        return "#640000"
-
-    # =========================================================
-    # ACTUALIZACIÓN BLINDADA (Aquí estaba el error)
-    # =========================================================
-    def actualizar_datos(self, lista_paises):
-        if not self.paises or not lista_paises: return
-
-        # Creamos diccionario ignorando filas sin código
-        datos_dict = {}
-        for fila in lista_paises:
-            if "Country Code" in fila:
-                datos_dict[fila["Country Code"]] = fila
-        
-        hay_cambios_visuales = False
-        idx_min = len(self.paises)
-        idx_max = 0
-
-        for i, pais in enumerate(self.paises):
-            codigo = pais["codigo"]
+        # Forzar repintado total
+        for pais in self.paises:
+            pob = pais["poblacion"]
+            infectados = pais["infectado"] + pais["recuperado"] + pais.get("muerto", 0)
+            pct = infectados / pob if pob > 0 else 0
+            pais["color"] = self.calcular_color_hex(pct)
             
-            # --- CORRECCIÓN: Todo ocurre SOLO si el país existe en los datos ---
-            if codigo in datos_dict:
-                dato = datos_dict[codigo]
-                
-                # 1. Obtenemos datos seguros (con .get para evitar KeyError)
-                s = int(dato.get("S", 0))
-                i_val = int(dato.get("I", 0))
-                r = int(dato.get("R", 0))
-                m = int(dato.get("M", 0)) # Usamos 'M' para coincidir con Loader
-                
-                # 2. Población real
-                poblacion_total = s + i_val + r + m
-                if poblacion_total <= 0: poblacion_total = 1
-                
-                # 3. Cálculo de Impacto (Acumulativo: I + R + M)
-                afectados_acumulados = i_val + r + m
-                pct_infeccion = afectados_acumulados / poblacion_total
-                if pct_infeccion > 1.0: pct_infeccion = 1.0
-                
-                # 4. Cálculo de Color
-                # Definimos la variable AQUÍ DENTRO
-                nuevo_color = self.calcular_color_hex(pct_infeccion)
-                
-                # 5. Actualizar Datos Internos
-                pais["infectado"] = i_val
-                pais["recuperado"] = r
-                pais["poblacion"] = poblacion_total
-                # Actualizamos nombre si viene en el CSV (a veces el JSON tiene códigos raros)
-                if "Country Name" in dato:
-                    pais["nombre"] = dato["Country Name"]
-
-                # 6. Detección de Cambios Visuales
-                # Esta comprobación DEBE estar identada DENTRO del 'if codigo in datos_dict'
-                if pais["color"] != nuevo_color:
-                    pais["color"] = nuevo_color
-                    hay_cambios_visuales = True
-                    if i < idx_min: idx_min = i
-                    if i > idx_max: idx_max = i
-
-        # Solo emitimos señal a QML si realmente cambiaron colores (Optimización)
-        if hay_cambios_visuales:
-            top = self.index(idx_min, 0)
-            bot = self.index(idx_max, 0)
-            self.dataChanged.emit(top, bot, [self.ColorRole])
+        self.dataChanged.emit(self.index(0,0), self.index(len(self.paises)-1, 0), [self.ColorRole])
 
 --- FIN DE ARCHIVO: controllers/mapa_modelo.py ---
 
 --- INICIO DE ARCHIVO: ui/main.qml ---
 import QtQuick
 import QtQuick.Controls
-import components 
+import components
+import themes
 
 ApplicationWindow {
     id: mainWindow
     visible: true
-    width: 1200 
+    width: 1200
     height: 720
     title: "Simulador SIRD - Dashboard"
-    color: "#121212"
+    color: theme.appBackground
+
+    ThemeManager {
+            id: theme
+    }
+    
+
+    // Propiedad de estado: controla si vemos el "mapa" o el "grafico"
+    property string vistaActual: "mapa"
 
     // 1. BARRA SUPERIOR
-header: BarraSuperior {
+    header: BarraSuperior {
+        visible: mainWindow.vistaActual === "mapa"
         onMenuClicked: opcionesDrawer.opened ? opcionesDrawer.close() : opcionesDrawer.open()
-        
-        // --- CONEXIÓN AL BACKEND ---
-        // Cuando se hace clic en Play/Pause, llamamos a la función de Python
-        onPlayPauseClicked: (isPlaying) => { 
-            console.log("QML enviando señal de Play/Pause..."); // Log en QML
-            backend.toggle_simulacion(isPlaying); // Llamada a Python
+
+        // Conexión al Backend
+        onPlayPauseClicked: (isPlaying) => {
+            if(backend) backend.toggle_simulacion(isPlaying);
         }
-        
-        onResetClicked: { 
-            console.log("QML enviando señal de Reinicio...");
-            backend.reiniciar(); 
+
+        onResetClicked: {
+            if(backend) backend.reiniciar();
         }
     }
 
-    // --- NUEVO: 2. BARRA INFERIOR DE ESTADO Y NOTICIAS ---
-   footer: BarraInferior {
+    // 2. BARRA INFERIOR
+    footer: BarraInferior {
         id: barraInf
+        visible: mainWindow.vistaActual === "mapa"
         
+        // Data Bindings seguros
         dia: backend ? backend.dia : "1"
+        primerPaisNombre: backend ? backend.primerPais : "..."
+        
         sanos: backend ? backend.sanos : 0
         infectados: backend ? backend.infectados : 0
         recuperados: backend ? backend.recuperados : 0
@@ -1121,26 +1652,106 @@ header: BarraSuperior {
         noticiaActual: backend ? backend.noticia : "Cargando..."
     }
 
-    
-    // 3. VENTANA LATERAL (Menú)
+    // 3. MENÚ LATERAL (Drawer)
     MenuOpciones {
         id: opcionesDrawer
-        y: header.height 
-        // --- AJUSTE AQUÍ: Restamos el header y el footer para que encaje perfecto ---
-        height: parent.height - header.height - footer.height 
+        y: header.height
+        height: parent.height - header.height - footer.height
+        themeManager: theme
     }
 
-    // 4. MAPA INTERACTIVO
+    // 4. CONTENEDOR PRINCIPAL (Loader Dinámico)
     Item {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         anchors.left: parent.left
+        
+        // Efecto visual: El contenido se encoge cuando sale el menú
         anchors.leftMargin: opcionesDrawer.position * opcionesDrawer.width
-        scale: 1.0 - (opcionesDrawer.position * 0.15)
+        scale: vistaActual === "mapa" ? (1.0 - (opcionesDrawer.position * 0.15)) : 1.0
 
+        // EL CEREBRO DE LA OPTIMIZACIÓN:
+        // Carga y destruye componentes según se necesiten
+        Loader {
+            id: mainLoader
+            anchors.fill: parent
+            sourceComponent: {
+                        if (mainWindow.vistaActual === "grafico") return compGrafico;
+                        if (mainWindow.vistaActual === "ranking") return compRanking;
+                        if (mainWindow.vistaActual === "noticias") return compNoticias;
+                        return compMapa;
+            }
+        }
+    }
+
+    // --- COMPONENTES DINÁMICOS ---
+
+    // A) El Mapa (Se destruye al ver gráficas para ahorrar CPU)
+    Component {
+        id: compMapa
         Mapa {
             anchors.fill: parent
+        }
+    }
+
+    // B) El Gráfico Histórico
+    Component {
+        id: compGrafico
+        VistaGrafica {
+            anchors.fill: parent
+            // Al volver, restauramos la vista del mapa
+            onVolverClicked: {
+                mainWindow.vistaActual = "mapa"
+            }
+        }
+    }
+
+    Component {
+        id: compRanking
+        VistaRanking {
+            anchors.fill: parent
+            onVolverClicked: mainWindow.vistaActual = "mapa"
+        }
+    }
+
+    Component {
+            id: compNoticias
+            VistaNoticias { anchors.fill: parent }
+    }
+
+    // ... (después de Component id: compRanking) ...
+    
+    GameOverModal {
+        id: gameOverPopup
+    
+        onReiniciarClicked: {
+            gameOverPopup.visible = false
+            if(backend) backend.reiniciar()
+        }
+    
+        onVerGraficaClicked: {
+            mainWindow.vistaActual = "grafico"
+        }
+    
+        onVerRankingClicked: {
+            mainWindow.vistaActual = "ranking"
+        }
+    }
+    
+    // CONEXIÓN SEÑAL BACKEND -> MODAL
+    Connections {
+        target: backend
+        function onGameOver(datos) {
+            gameOverPopup.abrir(datos)
+        }
+    }
+
+    Shortcut {
+        sequence: "k"  // La tecla que activa el truco
+        onActivated: {
+            console.log("😈 Tecla K detectada -> Activando Cheat...")
+            if(backend) backend.activar_cheat_fin()
         }
     }
 }
@@ -1156,6 +1767,16 @@ Item {
     id: mapRoot
     anchors.fill: parent
     clip: true
+
+    Rectangle {
+        anchors.fill: mapRoot
+        // Usamos una conexión segura al ThemeManager global
+        // Nota: Accedemos a 'theme' porque es un id global en main.qml
+        color: theme ? theme.mapBackground : "#121212"
+            
+        // Animación suave al cambiar de tema
+        Behavior on color { ColorAnimation { duration: 500 } }
+    }
 
     // =========================================================
     // 1. TOOLTIP (Variables Globales)
@@ -1270,59 +1891,64 @@ Item {
 
                 ShapePath {
                     strokeWidth: 1.0 / mapContainer.scale 
-                    strokeColor: "white"
+                    
+                    // --- CAMBIO AQUÍ ---
+                    strokeColor: theme ? theme.mapStroke : "white" 
+                    // -------------------
+                    
                     fillColor: (model.color_pais && model.color_pais !== "") ? model.color_pais : "#CFD8DC"
                     fillRule: ShapePath.WindingFill
                     PathSvg { path: model.path }
                 }
+                
 
-                MouseArea {
-                    id: countryMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    containmentMask: countryShape
-                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
-                    
-                    // Permite arrastrar el mapa desde un país
-                    drag.target: mapContainer
-                    drag.filterChildren: true 
-
-                    onDoubleClicked: (mouse) => {
-                        let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
-                        mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
-                    }
-
-                    // --- TOOLTIP CORREGIDO ---
-                    onEntered: {
-                        if (!countryMouse.drag.active) {
-                            try {
-                                mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
-                            } catch(e) { mapRoot.tooltipHtml = "Cargando..." }
-                            
-                            mapRoot.isTooltipVisible = true
-                            // CORRECCIÓN: Usamos mouseX/mouseY directos, no el objeto 'mouse'
-                            updateTooltipPos(mouseX, mouseY)
-                        }
-                    }
-                    
-                    onPositionChanged: (mouse) => {
-                        if (countryMouse.drag.active) {
-                            mapRoot.isTooltipVisible = false
-                        } else {
-                            // Aquí 'mouse' sí existe porque viene de la señal
-                            updateTooltipPos(mouse.x, mouse.y)
-                        }
-                    }
-
-                    onExited: mapRoot.isTooltipVisible = false
-                    onCanceled: mapRoot.isTooltipVisible = false // Por si el arrastre cancela el hover
-
-                    function updateTooltipPos(mx, my) {
-                        var pos = mapToItem(mapRoot, mx, my)
-                        mapRoot.tipX = pos.x + 15
-                        mapRoot.tipY = pos.y + 15
+            MouseArea {
+                id: countryMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                containmentMask: countryShape
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                drag.target: mapContainer
+                drag.filterChildren: true
+                
+                // --- 1. LÓGICA DEL TOOLTIP (RECUPERADA) ---
+                onEntered: {
+                // Llamamos a Python para obtener el HTML del país
+                if(mapa_modelo) {
+                    mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
+                    mapRoot.isTooltipVisible = true
                     }
                 }
+                
+                onExited: {
+                    mapRoot.isTooltipVisible = false
+                }
+                
+                onPositionChanged: (mouse) => {
+                    // Hacemos que el tooltip siga al mouse
+                    var pos = countryMouse.mapToItem(mapRoot, mouse.x, mouse.y)
+                    mapRoot.tipX = pos.x + 15
+                    mapRoot.tipY = pos.y + 15
+                }
+                                
+                // --- 2. LÓGICA DEL GRÁFICO DE PASTEL Y ZOOM ---
+                onDoubleClicked: (mouse) => {
+                // A) Zoom Visual
+                    let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
+                    mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
+                                
+                    // B) Coordenada Global
+                    var screenPos = countryMouse.mapToItem(mapRoot, mouse.x, mouse.y)
+                          
+                    // C) Abrir Popup
+                    infoPaisPopup.abrir(
+                        screenPos.x, 
+                        mapRoot.width, 
+                        mapRoot.height, 
+                        model.codigo 
+                    )
+                }
+            }
             }
         }
     }
@@ -1369,6 +1995,19 @@ Item {
             onClicked: mapRoot.setZoomManual(0.6)
         }
     }
+    PieChartPopup {
+        id: infoPaisPopup
+        // Se asegura de estar encima del mapa
+        z: 9999 
+
+        onIrARankingGlobal: {
+            mainWindow.vistaActual = "ranking"
+        }
+            
+        onIrAGraficaHistorica: {
+            mainWindow.vistaActual = "grafico"
+        }
+    }
 }
 
 --- FIN DE ARCHIVO: ui/components/Mapa.qml ---
@@ -1394,6 +2033,7 @@ ToolBar {
     property real infectados: 1
     property real recuperados: 0
     property real muertos: 0
+    property string primerPaisNombre: "..."
 
     // ========================================================
     // COMPONENTE DATO CORREGIDO (Sin conflictos de anclaje)
@@ -1496,44 +2136,82 @@ ToolBar {
                 colorAcento: "#ffb74d" 
                 tooltipText: "Países con al menos un infectado"
             }
+            DatoSird { 
+                icono: "☣️ Origen:"; 
+                valor: root.primerPaisNombre; 
+                colorAcento: "#ff5252" // Rojo alerta
+                tooltipText: "País Paciente Cero"
+            }
         }
 
         Item { Layout.fillWidth: true }
 
         // --- SECCIÓN DE NOTICIAS ---
         Rectangle {
-            Layout.preferredWidth: 350
-            Layout.preferredHeight: 40
-            Layout.alignment: Qt.AlignVCenter
-            color: "#2f3542"
-            radius: 5
-            border.color: "#747d8c"
-            clip: true 
-
-            RowLayout {
+            id: newsContainer
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+                
+            // MÁRGENES: Para que el borde no toque los extremos de la pantalla
+            Layout.topMargin: 10
+            Layout.bottomMargin: 10
+            Layout.rightMargin: 20 
+                
+            color: "#15ffffff" // Fondo blanco muy transparente (efecto cristal)
+                
+            // --- EL BORDE QUE PEDISTE ---
+            border.color: "white"
+            border.width: 1
+            radius: 6 // Esquinas redondeadas para que se vea moderno
+                
+            clip: true // IMPORTANTE: Corta el texto que se sale
+    
+            Text {
+                id: tickerText
+                text: backend ? backend.noticia : "Esperando datos..."
+                color: "#e0e0e0"
+                font.pixelSize: 16
+                font.bold: true
+                font.family: "Courier New" 
+                verticalAlignment: Text.AlignVCenter
+                    
+                x: parent.width 
+                anchors.verticalCenter: parent.verticalCenter
+    
+                NumberAnimation on x {
+                    from: parent.width 
+                    to: -tickerText.width 
+                    duration: 8000 
+                    loops: Animation.Infinite
+                    running: true
+                }
+                    
+                onTextChanged: {
+                    // Reinicio de animación
+                }
+            }
+    
+            // AREA CLICKEABLE CON EFECTO VISUAL
+            MouseArea {
+                id: newsMouse
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 10
-
-                Rectangle {
-                    Layout.preferredWidth: 80
-                    Layout.preferredHeight: 20
-                    color: "#ff3f34"
-                    radius: 3
-                    Text { 
-                        anchors.centerIn: parent; text: "NOTICIA"; 
-                        color: "white"; font.pixelSize: 10; font.bold: true 
-                    }
+                cursorShape: Qt.PointingHandCursor
+                hoverEnabled: true // Para detectar cuando pasas el mouse
+                    
+                onClicked: {
+                    if(backend) backend.pausar_simulacion()
+                    mainWindow.vistaActual = "noticias"
                 }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.noticiaActual
-                    color: "white"
-                    font.pixelSize: 13
-                    font.italic: true
-                    elide: Text.ElideRight 
-                }
+            }
+                
+            // EFECTO EXTRA: Iluminar el borde cuando pasas el mouse
+            states: State {
+                name: "hovered"
+                when: newsMouse.containsMouse
+                PropertyChanges { target: newsContainer; border.color: "#00cec9"; color: "#25ffffff" }
+            }
+            transitions: Transition {
+                ColorAnimation { duration: 200 }
             }
         }
     }
@@ -1624,106 +2302,350 @@ ToolBar {
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs 6.3 // IMPORTANTE: Para abrir el gestor de archivos nativo
 
 Drawer {
     id: rootDrawer
-    width: 300
-    modal: false; dim: false; closePolicy: Popup.NoAutoClose
+    width: 320 // Aumentamos un poco el ancho para evitar cortes en Linux/Gnome
+    modal: false
+    dim: false
+    closePolicy: Popup.NoAutoClose
     background: Rectangle { color: "#1e1e2e" }
     
-    property bool editandoConfig: false
+    // Propiedad para evitar que los elementos se salgan visualmente
+    clip: true 
 
+    property int vistaActual: 0 
+    property var themeManager: null
+    
     onOpened: if(backend) backend.pausar_simulacion()
+
+    // --- COMPONENTE DE DIÁLOGO NATIVO ---
+    FileDialog {
+        id: fileDialog
+        title: "Exportar Datos de la Simulación"
+        nameFilters: ["Archivos CSV (*.csv)", "Todos los archivos (*)"]
+        // Por defecto sugiere un nombre, pero deja al usuario cambiarlo y elegir carpeta
+        currentFile: "Reporte_Pandemia_" + Qt.formatDateTime(new Date(), "yyyy-MM-dd") + ".csv"
+        fileMode: FileDialog.SaveFile
+        
+        onAccepted: {
+            // Pasamos la ruta elegida (selectedFile) al backend
+            if(backend) backend.exportar_datos_excel(selectedFile)
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 20
         spacing: 15
 
+        // CABECERA
         Text {
-            text: rootDrawer.editandoConfig ? "Configurar" : "Opciones SIRD"
-            color: "white"
+            text: "Paper-Pandemic"
+            color: "#bdc3c7"
             font.bold: true
-            font.pixelSize: 22
+            font.pixelSize: 24
             Layout.alignment: Qt.AlignHCenter
         }
         
-        Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
-
-        // VISTA PRINCIPAL
-        ColumnLayout {
-            visible: !rootDrawer.editandoConfig
-            Layout.fillWidth: true
-            
-            Button {
-                Layout.fillWidth: true; height: 50
-                background: Rectangle { color: "#3a3f55"; radius: 8 }
-                contentItem: Text { text: "⚙️ Parámetros"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                onClicked: rootDrawer.editandoConfig = true
-            }
+        Rectangle { 
+            Layout.fillWidth: true; height: 2; color: "#ff5252" 
         }
 
-        // VISTA SLIDERS
-        ScrollView {
-            visible: rootDrawer.editandoConfig
-            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+        // CONTENIDO CAMBIANTE
+        StackLayout {
+            id: stackVistas
+            currentIndex: rootDrawer.vistaActual
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            
+            // FIX DE DESBORDAMIENTO:
+            // Aseguramos que el StackLayout respete los márgenes del padre
+            clip: true 
 
+            // -----------------------------------------------------
+            // ÍNDICE 0: MENÚ PRINCIPAL
+            // -----------------------------------------------------
             ColumnLayout {
-                width: parent.width; spacing: 20
+                spacing: 15
+                // Layout.fillWidth asegura que los hijos se estiren al ancho disponible
+                Layout.fillWidth: true 
 
-                // === SOLUCIÓN: Usar backend.config ===
-                // Verifica que backend y config existan antes de pintar
-                
-                SliderControl {
-                    titulo: "Tasa de Contagio (β)"
-                    // Usamos backend.config
-                    valorInicial: backend ? backend.config.beta : 0.5
-                    maximo: 1.0
-                    onValorCambiado: (val) => { if(backend) backend.config.beta = val }
-                }
-
-                SliderControl {
-                    titulo: "Recuperación (γ)"
-                    valorInicial: backend ? backend.config.gamma : 0.1
-                    maximo: 0.5
-                    onValorCambiado: (val) => { if(backend) backend.config.gamma = val }
-                }
-
-                SliderControl {
-                    titulo: "Mortalidad (μ)"
-                    valorInicial: backend ? backend.config.mu : 0.01
-                    maximo: 0.1
-                    onValorCambiado: (val) => { if(backend) backend.config.mu = val }
-                }
-
-                SliderControl {
-                    titulo: "Prob. Frontera"
-                    valorInicial: backend ? backend.config.p_frontera : 1.0
-                    maximo: 1.0
-                    onValorCambiado: (val) => { if(backend) backend.config.p_frontera = val }
-                }
-
-                Item { Layout.fillHeight: true; height: 20 }
+                Text { text: "Menú Principal"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
                 Button {
                     Layout.fillWidth: true; height: 50
-                    background: Rectangle { color: "#e74c3c"; radius: 8 }
-                    contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: "#3a3f55"; radius: 8 }
+                    contentItem: Text { text: "🔧 Configuración"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: rootDrawer.vistaActual = 1
+                }
+
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#3a3f55"; radius: 8 }
+                    contentItem: Text { text: "⚙️ Parámetros"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: rootDrawer.vistaActual = 2
+                }
+
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#3a3f55"; radius: 8 }
+                    contentItem: Text { text: "📊 Estadísticas"; color: "white"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    onClicked: rootDrawer.vistaActual = 3
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+
+            // -----------------------------------------------------
+            // ÍNDICE 1: CONFIGURACIÓN (Con Exportar Mejorado)
+            // -----------------------------------------------------
+            ColumnLayout {
+                spacing: 20
+                Layout.fillWidth: true
+
+                Text { text: "Configuración"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+                
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "🎨 Tema Visual"; color: "#bdc3c7"; font.bold: true }
+                    
+                    ComboBox {
+                        id: comboTema
+                        Layout.fillWidth: true
+                        // Obtenemos la lista del ThemeManager
+                        model: rootDrawer.themeManager ? rootDrawer.themeManager.themeNames : []
+                        
+                        // Seleccionar el actual al inicio
+                        Component.onCompleted: currentIndex = find("Default (Dark)")
+
+                        delegate: ItemDelegate {
+                            width: comboTema.width
+                            contentItem: Text { text: modelData; color: "white"; font.pixelSize: 14 }
+                            background: Rectangle { color: hovered ? "#3a3f55" : "#1e1e2e" }
+                        }
+                        contentItem: Text { 
+                            text: comboTema.displayText; color: "white"; leftPadding: 10; verticalAlignment: Text.AlignVCenter 
+                        }
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: "#555" }
+
+                        onActivated: {
+                            if(rootDrawer.themeManager) {
+                                // 1. Cambiar colores de la UI (QML)
+                                rootDrawer.themeManager.setTheme(currentText)
+                                
+                                // 2. Cambiar lógica de colores del Mapa (Python)
+                                if(backend) {
+                                    var nuevaPaleta = rootDrawer.themeManager.currentGradient
+                                    backend.cambiar_tema_mapa(nuevaPaleta)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+
+
+
+                // 1. NOMBRE VIRUS
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "🏷️ Nombre del Virus"; color: "#bdc3c7"; font.bold: true }
+                    TextField {
+                        Layout.fillWidth: true
+                        placeholderText: "Ej: Paper-20"
+                        text: backend ? backend.config.NOMBRE_VIRUS : ""
+                        color: "white"
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: parent.activeFocus ? "#00cec9" : "#555" }
+                        onTextEdited: if(backend) backend.config.NOMBRE_VIRUS = text
+                    }
+                }
+
+                // 2. PAÍS INICIO
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Text { text: "📍 Zona Cero (Origen)"; color: "#bdc3c7"; font.bold: true }
+                    ComboBox {
+                        id: comboPais
+                        Layout.fillWidth: true
+                        model: backend ? backend.listaNombresPaises : []
+                        Component.onCompleted: {
+                            if(backend) {
+                                var idx = find(backend.config.PAIS_INICIO)
+                                if (idx !== -1) currentIndex = idx
+                            }
+                        }
+                        delegate: ItemDelegate {
+                            width: comboPais.width
+                            contentItem: Text { text: modelData; color: "white"; font.pixelSize: 14 }
+                            background: Rectangle { color: hovered ? "#3a3f55" : "#1e1e2e" }
+                        }
+                        contentItem: Text { 
+                            text: comboPais.displayText; color: "white"; leftPadding: 10; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight 
+                        }
+                        background: Rectangle { color: "#2f3542"; radius: 5; border.color: "#555" }
+                        onActivated: if(backend) backend.config.PAIS_INICIO = currentText
+                    }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+                // 4. EXPORTAR DATOS (AHORA ABRE DIÁLOGO)
+                Button {
+                    Layout.fillWidth: true; height: 50
+                    background: Rectangle { color: "#27ae60"; radius: 8 }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "💾"; font.pixelSize: 20 }
+                        Text { text: "Exportar (.csv)"; color: "white"; font.bold: true }
+                    }
+                    // AQUÍ ESTÁ EL CAMBIO: Abrimos el diálogo, no llamamos al backend directo
+                    onClicked: fileDialog.open()
+                }
+
+                Item { Layout.fillHeight: true }
+                
+                Button {
+                    Layout.fillWidth: true; flat: true
+                    contentItem: Text { 
+                        text: "⬅ Volver y Aplicar"; // Cambié el texto para que sea obvio
+                        color: "#ff5252"; 
+                        font.bold: true; 
+                        horizontalAlignment: Text.AlignHCenter 
+                    }
                     onClicked: {
+                        // 1. REINICIAMOS LA SIMULACIÓN
                         if(backend) backend.reiniciar_simulacion()
-                        rootDrawer.editandoConfig = false
+                        
+                        // 2. VOLVEMOS AL MENÚ PRINCIPAL
+                        rootDrawer.vistaActual = 0
+                        
+                        // Opcional: Cerrar el menú automáticamente
+                        // rootDrawer.close() 
+                    }
+                }
+            }
+
+            // -----------------------------------------------------
+            // ÍNDICE 2: PARÁMETROS
+            // -----------------------------------------------------
+            ScrollView {
+                clip: true // Evita que el scroll se salga
+                Layout.fillWidth: true 
+                Layout.fillHeight: true
+
+                ColumnLayout {
+                    width: parent.width // Forzamos ancho del contenido al del padre
+                    spacing: 20
+
+                    Text { text: "Ajuste de Variables"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+
+                    SliderControl {
+                        titulo: "⏩ Velocidad"
+                        valorInicial: 0.5; maximo: 2.0
+                        onValorCambiado: (val) => { if(backend) backend.cambiar_velocidad(val) }
+                    }
+                    
+                    SliderControl {
+                        titulo: "Tasa Contagio (β)"
+                        valorInicial: backend ? backend.config.beta : 0.5; maximo: 1.0
+                        onValorCambiado: (val) => { if(backend) backend.config.beta = val }
+                    }
+
+                    SliderControl {
+                        titulo: "Recuperación (γ)"
+                        valorInicial: backend ? backend.config.gamma : 0.1; maximo: 0.5
+                        onValorCambiado: (val) => { if(backend) backend.config.gamma = val }
+                    }
+
+                    SliderControl {
+                        titulo: "Mortalidad (μ)"
+                        valorInicial: backend ? backend.config.mu : 0.01; maximo: 0.1
+                        onValorCambiado: (val) => { if(backend) backend.config.mu = val }
+                    }
+
+                    SliderControl {
+                        titulo: "Prob. Frontera"
+                        valorInicial: backend ? backend.config.p_frontera : 1.0; maximo: 1.0
+                        onValorCambiado: (val) => { if(backend) backend.config.p_frontera = val }
+                    }
+
+                    Item { Layout.fillHeight: true; height: 20 }
+
+                    Button {
+                        Layout.fillWidth: true; height: 50
+                        background: Rectangle { color: "#e74c3c"; radius: 8 }
+                        contentItem: Text { text: "⚠️ APLICAR Y REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 14 }
+                        onClicked: if(backend) backend.reiniciar_simulacion()
+                    }
+
+                    Button {
+                        Layout.fillWidth: true; flat: true
+                        contentItem: Text { text: "⬅ Volver"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
+                        onClicked: rootDrawer.vistaActual = 0
+                    }
+                }
+            }
+
+            // -----------------------------------------------------
+            // ÍNDICE 3: ESTADÍSTICAS
+            // -----------------------------------------------------
+            ColumnLayout {
+                spacing: 15
+                Layout.fillWidth: true
+                Text { text: "Estadísticas"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+                
+                Item { Layout.fillHeight: true; height: 20 }
+
+                Button {
+                    Layout.fillWidth: true; height: 60
+                    background: Rectangle { color: "#e67e22"; radius: 8 }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "🏆"; font.pixelSize: 24 }
+                        Text { text: "Ranking Global"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                    }
+                    onClicked: {
+                        if(backend) backend.pausar_simulacion()
+                        mainWindow.vistaActual = "ranking"
+                        rootDrawer.close()
                     }
                 }
 
                 Button {
+                    Layout.fillWidth: true; height: 60
+                    background: Rectangle { color: "#2ecc71"; radius: 8 }
+                    contentItem: RowLayout {
+                        anchors.centerIn: parent
+                        Text { text: "📈"; font.pixelSize: 24 }
+                        Text { text: "Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                    }
+                    onClicked: {
+                        if(backend) backend.pausar_simulacion()
+                        mainWindow.vistaActual = "grafico"
+                        rootDrawer.close()
+                    }
+                }
+
+                Item { Layout.fillHeight: true }
+                
+                Button {
                     Layout.fillWidth: true; flat: true
-                    contentItem: Text { text: "Volver"; color: "#b2bec3"; horizontalAlignment: Text.AlignHCenter }
-                    onClicked: rootDrawer.editandoConfig = false
+                    contentItem: Text { text: "⬅ Volver"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: rootDrawer.vistaActual = 0
                 }
             }
         }
     }
 
+    // COMPONENTE SLIDER REUTILIZABLE
     component SliderControl : ColumnLayout {
         property string titulo: ""
         property real valorInicial: 0
@@ -1741,10 +2663,1316 @@ Drawer {
             id: slider
             Layout.fillWidth: true
             from: 0.0; to: maximo; value: valorInicial; stepSize: 0.001
-            onPressedChanged: { if (!pressed) parent.valorCambiado(value) }
+            onMoved: parent.valorCambiado(value) 
         }
     }
 }
 
 --- FIN DE ARCHIVO: ui/components/MenuOpciones.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/PieChartPopup.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+Rectangle {
+    id: root
+    width: 320; height: 450
+    color: "#ee1e1e2e" 
+    radius: 12
+    border.color: "#666"
+    border.width: 1
+    visible: false
+    z: 10000 
+
+    property var datosPais: ({ valS:0, valI:0, valR:0, valM:0, poblacion:0, nombre:"Cargando..." })
+    property string codigoPaisActual: "" 
+    
+    // --- NUEVO: ESTADO INTERNO PARA CAMBIAR DE VISTA ---
+    property string vistaInterna: "DETALLE" // Valores: "DETALLE", "MENU"
+
+    // Señales para comunicarnos con el Mapa/Main
+    signal cerrarFronterasClicked()
+    signal irARankingGlobal()  // NUEVA
+    signal irAGraficaHistorica() // NUEVA
+
+    property color cS: theme ? theme.pieS : "#DCE775"
+    property color cI: theme ? theme.pieI : "#ff5252"
+    property color cR: theme ? theme.pieR : "#4fc3f7"
+    property color cM: theme ? theme.pieM : "#95a5a6"
+
+    onCSChanged: pieCanvas.requestPaint()
+    onCIChanged: pieCanvas.requestPaint()
+    onCRChanged: pieCanvas.requestPaint()
+    onCMChanged: pieCanvas.requestPaint()
+
+    property int hoveredSlice: -1
+    property string tooltipText: ""
+    property color tooltipColor: "transparent"
+
+    Timer {
+        id: forcePaintTimer
+        interval: 100
+        repeat: false
+        onTriggered: pieCanvas.requestPaint()
+    }
+
+    Connections {
+        target: root.visible ? backend : null
+        function onDiaChanged(nuevoDia) {
+            if (root.codigoPaisActual === "" || root.vistaInterna !== "DETALLE") return;
+            var diaNum = parseInt(nuevoDia)
+            if (diaNum % 5 === 0) refrescarDatos()
+        }
+    }
+
+    function refrescarDatos() {
+        if(backend && root.codigoPaisActual !== "") {
+            var nuevosDatos = backend.obtener_detalle_pais(root.codigoPaisActual)
+            if (nuevosDatos.existe) root.datosPais = nuevosDatos
+        }
+    }
+
+    function abrir(xClick, anchoPantalla, altoPantalla, codigoPais) {
+        root.codigoPaisActual = codigoPais
+        root.vistaInterna = "DETALLE" // SIEMPRE reiniciamos a la vista de detalle al abrir
+        refrescarDatos()
+
+        if(!datosPais.existe) return;
+
+        var margen = 30
+        var topMargen = 40
+        var anchoPanel = (anchoPantalla * 0.45) 
+        var altoPanel = altoPantalla - (topMargen * 2)
+
+        root.width = anchoPanel
+        root.height = altoPanel
+        root.y = topMargen
+
+        if (xClick < anchoPantalla / 2) {
+            root.x = anchoPantalla - anchoPanel - margen
+        } else {
+            root.x = margen
+        }
+        
+        root.visible = true
+        pieCanvas.requestPaint()
+        forcePaintTimer.start()
+    }
+
+    onDatosPaisChanged: pieCanvas.requestPaint()
+
+    RoundButton {
+        text: "✕"
+        width: 40; height: 40
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 10
+        font.pixelSize: 18
+        flat: true
+        contentItem: Text { text: parent.text; color: "#aaa"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+        onClicked: {
+            root.visible = false
+            root.codigoPaisActual = "" 
+        }
+    }
+
+    // =========================================================
+    // GRUPO 1: DETALLES DEL PAÍS (Gráfico, Texto, Leyenda)
+    // =========================================================
+    ColumnLayout {
+        id: grupoDetalle
+        anchors.fill: parent
+        anchors.margins: 25
+        spacing: 15
+        visible: root.vistaInterna === "DETALLE" // Solo visible en modo detalle
+
+        Text {
+            text: root.datosPais.nombre || "..."
+            color: "white"
+            font.bold: true
+            font.pixelSize: 26
+            Layout.alignment: Qt.AlignHCenter
+            Layout.fillWidth: true
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+        }
+
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 180
+            
+            Canvas {
+                id: pieCanvas
+                anchors.fill: parent
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    if (!root.datosPais || root.datosPais.poblacion === undefined) return;
+                    var minSide = Math.min(width, height);
+                    if (minSide < 10) return;
+                    var cx = width / 2; var cy = height / 2;
+                    var radius = (minSide / 2) - 15;
+                    if (radius <= 0) return;
+                    
+                    var total = Number(root.datosPais.poblacion);
+                    var valS = Number(root.datosPais.valS);
+                    var valI = Number(root.datosPais.valI);
+                    var valR = Number(root.datosPais.valR);
+                    var valM = Number(root.datosPais.valM);
+                    var startAngle = 0;
+
+                    function drawSlice(val, color) {
+                        if(val <= 0) return;
+                        var sliceAngle = (val / total) * 2 * Math.PI;
+                        ctx.beginPath();
+                        ctx.moveTo(cx, cy);
+                        ctx.arc(cx, cy, radius, startAngle, startAngle + sliceAngle);
+                        ctx.closePath();
+                        ctx.fillStyle = color; ctx.fill();
+                        ctx.lineWidth = 3; ctx.strokeStyle = "white"; ctx.stroke();
+                        startAngle += sliceAngle;
+                    }
+                    drawSlice(valS, root.cS); drawSlice(valI, root.cI);
+                    drawSlice(valR, root.cR); drawSlice(valM, root.cM);
+                }
+            }
+            // ... (MouseArea y Tooltips igual que antes) ...
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                onExited: root.hoveredSlice = -1
+                onPositionChanged: (mouse) => {
+                    var cx = width / 2; var cy = height / 2;
+                    var dx = mouse.x - cx; var dy = mouse.y - cy;
+                    var dist = Math.sqrt(dx*dx + dy*dy);
+                    var minSide = Math.min(width, height);
+                    var radius = (minSide / 2) - 15;
+                    if (radius <= 0 || dist > radius) { root.hoveredSlice = -1; return; }
+                    var angle = Math.atan2(dy, dx);
+                    if (angle < 0) angle += 2 * Math.PI;
+                    var total = Number(root.datosPais.poblacion);
+                    var currentAngle = 0;
+                    var slices = [
+                        {val: Number(root.datosPais.valS), lbl: "Sanos", pct: root.datosPais.pctS, col: root.cS},
+                        {val: Number(root.datosPais.valI), lbl: "Infectados", pct: root.datosPais.pctI, col: root.cI},
+                        {val: Number(root.datosPais.valR), lbl: "Recuperados", pct: root.datosPais.pctR, col: root.cR},
+                        {val: Number(root.datosPais.valM), lbl: "Muertos", pct: root.datosPais.pctM, col: root.cM}
+                    ];
+                    for(var i=0; i<slices.length; i++) {
+                        if(slices[i].val <= 0) continue;
+                        var sliceAngle = (slices[i].val / total) * 2 * Math.PI;
+                        if (angle < currentAngle + sliceAngle) {
+                            root.hoveredSlice = i;
+                            root.tooltipText = slices[i].lbl + "\n" + Number(slices[i].pct).toFixed(2) + "%";
+                            root.tooltipColor = slices[i].col;
+                            return;
+                        }
+                        currentAngle += sliceAngle;
+                    }
+                    root.hoveredSlice = -1;
+                }
+            }
+             Rectangle {
+                visible: root.hoveredSlice !== -1
+                width: 100; height: 50
+                color: root.tooltipColor
+                radius: 8; border.color: "white"; border.width: 2
+                anchors.centerIn: parent
+                Text { anchors.centerIn: parent; text: root.tooltipText; color: "black"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+            }
+        }
+
+        // Leyenda
+        RowLayout {
+            Layout.fillWidth: true; Layout.alignment: Qt.AlignHCenter; spacing: 15
+            component LeyendaItem: Column {
+                property color colorBase; property string titulo; property real valor
+                spacing: 3; Layout.alignment: Qt.AlignTop 
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter; spacing: 5
+                    Rectangle { width: 10; height: 10; radius: 5; color: parent.parent.colorBase; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: parent.parent.titulo; color: "#ccc"; font.pixelSize: 11; font.bold: true }
+                }
+                Text { text: Number(parent.valor || 0).toLocaleString(Qt.locale(), 'f', 0); color: "white"; font.bold: true; font.pixelSize: 13; anchors.horizontalCenter: parent.horizontalCenter }
+            }
+            LeyendaItem { colorBase: root.cS; titulo: "Sanos";       valor: root.datosPais.valS }
+            LeyendaItem { colorBase: root.cI; titulo: "Infectados";  valor: root.datosPais.valI }
+            LeyendaItem { colorBase: root.cR; titulo: "Recuperados"; valor: root.datosPais.valR }
+            LeyendaItem { colorBase: root.cM; titulo: "Muertos";     valor: root.datosPais.valM }
+        }
+
+        Text {
+            text: "Población: " + Number(root.datosPais.poblacion).toLocaleString(Qt.locale(), 'f', 0)
+            color: "white"; font.bold: true; font.pixelSize: 16
+            Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 5
+        }
+
+        Item { Layout.fillHeight: true; Layout.preferredHeight: 10 }
+
+        // BOTONES DE ACCIÓN PRINCIPAL
+        ColumnLayout {
+            spacing: 10
+            
+            Button {
+                Layout.fillWidth: true; height: 45
+                background: Rectangle { color: "#3a3f55"; radius: 8 }
+                contentItem: Text { text: "🔒 CERRAR FRONTERAS"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: root.cerrarFronterasClicked()
+            }
+
+            // AL PULSAR ESTE, CAMBIAMOS DE VISTA
+            Button {
+                Layout.fillWidth: true; height: 45
+                background: Rectangle { color: "#e67e22"; radius: 8 }
+                contentItem: Text { text: "📊 VER ESTADÍSTICAS"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: root.vistaInterna = "MENU" // <--- AQUÍ OCURRE LA MAGIA
+            }
+        }
+    }
+
+    // =========================================================
+    // GRUPO 2: MENÚ DE NAVEGACIÓN (Lo que querías)
+    // =========================================================
+    ColumnLayout {
+        id: grupoMenu
+        anchors.fill: parent
+        anchors.margins: 30
+        spacing: 20
+        visible: root.vistaInterna === "MENU" // Solo visible en modo menú
+
+        Text {
+            text: "Estadísticas Globales"
+            color: "white"
+            font.bold: true
+            font.pixelSize: 22
+            Layout.alignment: Qt.AlignHCenter
+        }
+        
+        Text {
+            text: "Selecciona una vista para analizar el avance de la pandemia."
+            color: "#aaa"
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            Layout.fillWidth: true
+        }
+
+        Item { Layout.fillHeight: true } // Espacio flexible arriba
+
+        // BOTÓN 1: RANKING
+        Button {
+            Layout.fillWidth: true; height: 60
+            background: Rectangle { color: "#e67e22"; radius: 8 } // Naranja
+            contentItem: RowLayout {
+                anchors.centerIn: parent
+                Text { text: "🏆"; font.pixelSize: 24 }
+                Text { text: "Ver Ranking Global"; color: "white"; font.bold: true; font.pixelSize: 16 }
+            }
+            onClicked: {
+                root.visible = false // Cerramos el popup
+                root.irARankingGlobal() // Avisamos al padre
+            }
+        }
+
+        // BOTÓN 2: GRÁFICA
+        Button {
+            Layout.fillWidth: true; height: 60
+            background: Rectangle { color: "#2ecc71"; radius: 8 } // Verde
+            contentItem: RowLayout {
+                anchors.centerIn: parent
+                Text { text: "📈"; font.pixelSize: 24 }
+                Text { text: "Ver Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+            }
+            onClicked: {
+                root.visible = false // Cerramos el popup
+                root.irAGraficaHistorica() // Avisamos al padre
+            }
+        }
+
+        Item { Layout.fillHeight: true } // Espacio flexible abajo
+
+        // BOTÓN VOLVER (Para regresar a ver el pastel)
+        Button {
+            Layout.fillWidth: true
+            flat: true
+            contentItem: Text { text: "⬅ Volver al País"; color: "#ccc"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+            onClicked: root.vistaInterna = "DETALLE" // Regresamos a la vista A
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/PieChartPopup.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/GameOverModal.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+Rectangle {
+    id: root
+    anchors.fill: parent
+    color: "#cc000000" // Fondo negro semitransparente (Bloquea clicks)
+    visible: false
+    z: 20000 // Por encima de TODO (incluso del PieChartPopup que tiene z:10000)
+
+    // Propiedades de datos
+    property string tituloFin: "Virus Erradicado"
+    property string diaFin: "0"
+    property double totalS: 0
+    property double totalR: 0
+    property double totalM: 0
+    property double paisesInf: 0
+
+    // Estado interno: "RESUMEN" o "STATS"
+    property string estadoActual: "RESUMEN"
+
+    signal reiniciarClicked()
+    signal verGraficaClicked()
+    signal verRankingClicked()
+
+    // MouseArea gigante para atrapar clicks y que no pasen al mapa
+    MouseArea { anchors.fill: parent }
+
+    function abrir(datos) {
+        tituloFin = datos.titulo
+        diaFin = datos.dia
+        totalS = datos.sanos
+        totalR = datos.recuperados
+        totalM = datos.muertos
+        paisesInf = datos.paises_afectados
+        estadoActual = "RESUMEN" // Siempre empezar en resumen
+        root.visible = true
+    }
+
+    // CONTENEDOR CENTRAL
+    Rectangle {
+        width: 450
+        height: estadoActual === "RESUMEN" ? 500 : 350
+        anchors.centerIn: parent
+        color: "#1e1e2e"
+        radius: 15
+        border.color: "#444"
+        border.width: 1
+
+        // Animación suave al cambiar de altura
+        Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 30
+            spacing: 20
+
+            // ------------------------------------------------
+            // VISTA 1: RESUMEN DE PARTIDA
+            // ------------------------------------------------
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.estadoActual === "RESUMEN"
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 15
+
+                    // Icono y Título
+                    Text { 
+                        text: "🏁"
+                        font.pixelSize: 50
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Text { 
+                        text: root.tituloFin
+                        color: "white"
+                        font.bold: true
+                        font.pixelSize: 28
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Text { 
+                        text: "La simulación ha terminado."
+                        color: "#aaa"
+                        font.pixelSize: 14
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+
+                    Rectangle { Layout.fillWidth: true; height: 1; color: "#444"; Layout.margins: 10 }
+
+                    // Grid de Datos
+                    GridLayout {
+                        columns: 2
+                        Layout.alignment: Qt.AlignHCenter
+                        rowSpacing: 15
+                        columnSpacing: 30
+
+                        Text { text: "📅 Duración:"; color: "#ccc"; font.bold: true }
+                        Text { text: root.diaFin + " Días"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignRight }
+
+                        Text { text: "🌍 Países Afectados:"; color: "#ffb74d"; font.bold: true }
+                        Text { text: root.paisesInf + "/250"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignRight }
+
+                        Text { text: "💀 Total Muertos:"; color: "#ff5252"; font.bold: true }
+                        Text { text: Number(root.totalM).toLocaleString(Qt.locale(), 'f', 0); color: "white"; font.bold: true; horizontalAlignment: Text.AlignRight }
+
+                        Text { text: "💚 Total Recuperados:"; color: "#4fc3f7"; font.bold: true }
+                        Text { text: Number(root.totalR).toLocaleString(Qt.locale(), 'f', 0); color: "white"; font.bold: true; horizontalAlignment: Text.AlignRight }
+
+                        Text { text: "🛡️ Sobrevivientes Sanos:"; color: "#DCE775"; font.bold: true }
+                        Text { text: Number(root.totalS).toLocaleString(Qt.locale(), 'f', 0); color: "white"; font.bold: true; horizontalAlignment: Text.AlignRight }
+                    }
+
+                    Item { Layout.fillHeight: true }
+
+                    // Botones Principales
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 15
+                        
+                        Button {
+                            Layout.fillWidth: true; height: 50
+                            background: Rectangle { color: "#e74c3c"; radius: 8 }
+                            contentItem: Text { text: "⟲ REINICIAR"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            onClicked: root.reiniciarClicked()
+                        }
+                        
+                        Button {
+                            Layout.fillWidth: true; height: 50
+                            background: Rectangle { color: "#3a3f55"; radius: 8 }
+                            contentItem: Text { text: "📊 ESTADÍSTICAS"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            onClicked: root.estadoActual = "STATS" // Cambia la vista
+                        }
+                    }
+                }
+            }
+
+            // ------------------------------------------------
+            // VISTA 2: MENÚ DE ESTADÍSTICAS (Transformada)
+            // ------------------------------------------------
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.estadoActual === "STATS"
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 15
+
+                    Text { 
+                        text: "Análisis Post-Pandemia"
+                        color: "white"
+                        font.bold: true
+                        font.pixelSize: 22
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+
+                    Item { Layout.fillHeight: true }
+
+                    // Botón Gráfica
+                    Button {
+                        Layout.fillWidth: true; height: 55
+                        background: Rectangle { color: "#2ecc71"; radius: 8 }
+                        contentItem: Row {
+                            anchors.centerIn: parent; spacing: 10
+                            Text { text: "📈"; font.pixelSize: 20 }
+                            Text { text: "Ver Curva Histórica"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                        }
+                        onClicked: { root.visible = false; root.verGraficaClicked() }
+                    }
+
+                    // Botón Ranking
+                    Button {
+                        Layout.fillWidth: true; height: 55
+                        background: Rectangle { color: "#e67e22"; radius: 8 }
+                        contentItem: Row {
+                            anchors.centerIn: parent; spacing: 10
+                            Text { text: "🏆"; font.pixelSize: 20 }
+                            Text { text: "Ver Ranking Global"; color: "white"; font.bold: true; font.pixelSize: 16 }
+                        }
+                        onClicked: { root.visible = false; root.verRankingClicked() }
+                    }
+
+                    Item { Layout.fillHeight: true }
+
+                    // Volver al resumen
+                    Button {
+                        Layout.fillWidth: true; flat: true
+                        contentItem: Text { text: "⬅ Volver al Resumen"; color: "#aaa"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                        onClicked: root.estadoActual = "RESUMEN"
+                    }
+                }
+            }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/GameOverModal.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/VistaGrafica.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+Item {
+    id: root
+    anchors.fill: parent
+
+    // Señal para que main.qml sepa que queremos regresar
+    signal volverClicked()
+
+    // Datos crudos del backend
+    property var rawData: [] // [Dias, S, I, R, M]
+    property int maxDias: 1
+    
+    // Control de Visibilidad (Click en leyenda para alternar)
+    property bool showS: true
+    property bool showI: true
+    property bool showR: true
+    property bool showM: true
+
+    // Colores Profesionales (Estilo Neón/Dark)
+    readonly property color colS: "#DCE775" // Verde Lima (Susceptibles)
+    readonly property color colI: "#ff5252" // Rojo Intenso (Infectados)
+    readonly property color colR: "#4fc3f7" // Azul Cielo (Recuperados)
+    readonly property color colM: "#95a5a6" // Gris Acero (Muertos)
+    readonly property color colGrid: "#33ffffff" // Grid sutil
+
+    // Escala dinámica del eje Y
+    property real maxY: 1.0
+
+    // Carga inicial de datos
+    function cargarDatos() {
+        if(backend) {
+            var raw = backend.obtener_datos_historial()
+            if(raw && raw.length === 5 && raw[0].length > 0) {
+                rawData = raw
+                maxDias = raw[0][raw[0].length - 1]
+                calcularMaxY()
+                canvas.requestPaint()
+            }
+        }
+    }
+
+    // Calcula el "Zoom" vertical automáticamente según qué líneas están visibles
+    function calcularMaxY() {
+        if (!rawData || rawData.length === 0) return;
+        let maxVal = 0;
+        
+        if (showS) maxVal = Math.max(maxVal, Math.max(...rawData[1]));
+        if (showI) maxVal = Math.max(maxVal, Math.max(...rawData[2]));
+        if (showR) maxVal = Math.max(maxVal, Math.max(...rawData[3]));
+        if (showM) maxVal = Math.max(maxVal, Math.max(...rawData[4]));
+        
+        // Añadimos un 10% de margen superior para estética
+        root.maxY = maxVal > 0 ? maxVal * 1.1 : 100;
+    }
+
+    // Si cambiamos los toggles, repintamos
+    onShowSChanged: { calcularMaxY(); canvas.requestPaint() }
+    onShowIChanged: { calcularMaxY(); canvas.requestPaint() }
+    onShowRChanged: { calcularMaxY(); canvas.requestPaint() }
+    onShowMChanged: { calcularMaxY(); canvas.requestPaint() }
+
+    Component.onCompleted: cargarDatos()
+
+    // Fondo
+    Rectangle {
+        anchors.fill: parent
+        color: "#1e1e2e"
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 20
+        spacing: 10
+
+        // --- CABECERA ---
+        RowLayout {
+            Layout.fillWidth: true
+            Button {
+                text: "⬅ Volver"
+                flat: true
+                onClicked: root.volverClicked()
+                contentItem: Text { text: parent.text; color: "#bdc3c7"; font.bold: true }
+                background: Rectangle { color: "#3a3f55"; radius: 5 }
+            }
+            Item { Layout.fillWidth: true } 
+            Text {
+                text: "Análisis de Tendencias SIRD"
+                color: "white"
+                font.pixelSize: 20
+                font.bold: true
+                font.letterSpacing: 1
+            }
+            Item { Layout.fillWidth: true }
+        }
+
+        // --- LEYENDA INTERACTIVA ---
+        Row {
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 15
+            
+            // Componente interno para los botones de la leyenda
+            component LeyendaItem: MouseArea {
+                width: rowInt.width + 10; height: 25
+                property string label: ""
+                property color colorBase: "white"
+                property bool activo: true
+                property var targetProp: "" 
+
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root[targetProp] = !root[targetProp]
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: parent.activo ? "#20ffffff" : "transparent"
+                    radius: 4
+                    border.color: parent.activo ? parent.colorBase : "#555"
+                    border.width: 1
+                }
+                Row {
+                    id: rowInt
+                    anchors.centerIn: parent
+                    spacing: 6
+                    Rectangle { 
+                        width: 10; height: 10; radius: 5
+                        color: parent.parent.activo ? parent.parent.colorBase : "#555"
+                    }
+                    Text { 
+                        text: parent.parent.label
+                        color: parent.parent.activo ? "white" : "#777"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+            }
+
+            LeyendaItem { label: "Susceptibles"; colorBase: colS; activo: showS; targetProp: "showS" }
+            LeyendaItem { label: "Infectados"; colorBase: colI; activo: showI; targetProp: "showI" }
+            LeyendaItem { label: "Recuperados"; colorBase: colR; activo: showR; targetProp: "showR" }
+            LeyendaItem { label: "Muertos"; colorBase: colM; activo: showM; targetProp: "showM" }
+        }
+
+        // --- ÁREA DE DIBUJO ---
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+
+            Canvas {
+                id: canvas
+                anchors.fill: parent
+                // Renderizado inmediato para evitar parpadeos en Intel Atom
+                renderStrategy: Canvas.Immediate 
+                renderTarget: Canvas.Image
+
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+
+                    if (!root.rawData || root.rawData.length === 0) return;
+
+                    var dias = root.rawData[0];
+                    
+                    // Márgenes ajustados para dar "aire" a la derecha
+                    var padL = 50; var padB = 30; var padR = 70; var padT = 20;
+                    var plotW = width - padL - padR;
+                    var plotH = height - padB - padT;
+
+                    if (plotW <= 0 || plotH <= 0) return;
+
+                    var maxD = root.maxDias > 0 ? root.maxDias : 1;
+                    var maxY = root.maxY > 0 ? root.maxY : 100;
+
+                    // Funciones de mapeo
+                    function getX(dia) { return padL + (dia / maxD) * plotW; }
+                    function getY(val) { return padT + plotH - (val / maxY) * plotH; }
+
+                    // 1. DIBUJAR GRID
+                    ctx.strokeStyle = root.colGrid;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    // Horizontales
+                    for(var j=0; j<=5; j++) {
+                        var yLine = padT + (plotH * j / 5);
+                        ctx.moveTo(padL, yLine); ctx.lineTo(width-padR, yLine);
+                        // Etiquetas Eje Y
+                        var labelVal = Math.round(maxY * (1 - j/5));
+                        ctx.fillStyle = "#aaa"; ctx.font = "10px sans-serif";
+                        ctx.fillText(formatNumber(labelVal), 2, yLine + 3);
+                    }
+                    // Verticales
+                    for(var k=0; k<=5; k++) {
+                        var xLine = padL + (plotW * k / 5);
+                        ctx.moveTo(xLine, padT); ctx.lineTo(xLine, height-padB);
+                    }
+                    ctx.stroke();
+
+                    // 2. FUNCIÓN DE CURVAS CON DEGRADADO
+                    function drawCurve(dataArr, color, isVisible) {
+                        if(!isVisible) return;
+                        
+                        var grad = ctx.createLinearGradient(0, padT, 0, height-padB);
+                        grad.addColorStop(0.0, color); 
+                        grad.addColorStop(1.0, "transparent");
+
+                        ctx.beginPath();
+                        ctx.moveTo(getX(dias[0]), getY(dataArr[0]));
+                        for(var i=1; i<dias.length; i++) {
+                            ctx.lineTo(getX(dias[i]), getY(dataArr[i]));
+                        }
+                        // Relleno
+                        ctx.lineTo(getX(dias[dias.length-1]), height-padB);
+                        ctx.lineTo(getX(dias[0]), height-padB);
+                        ctx.closePath();
+                        
+                        ctx.globalAlpha = 0.3; 
+                        ctx.fillStyle = grad;
+                        ctx.fill();
+                        ctx.globalAlpha = 1.0;
+
+                        // Línea
+                        ctx.beginPath();
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = 2;
+                        ctx.moveTo(getX(dias[0]), getY(dataArr[0]));
+                        for(var i=1; i<dias.length; i++) {
+                            ctx.lineTo(getX(dias[i]), getY(dataArr[i]));
+                        }
+                        ctx.stroke();
+                    }
+
+                    // 3. DIBUJAR (Orden inverso de apilado)
+                    drawCurve(root.rawData[4], colM, showM); // M
+                    drawCurve(root.rawData[3], colR, showR); // R
+                    drawCurve(root.rawData[2], colI, showI); // I
+                    drawCurve(root.rawData[1], colS, showS); // S
+
+                    // Ejes
+                    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(padL, padT); ctx.lineTo(padL, height-padB); 
+                    ctx.moveTo(padL, height-padB); ctx.lineTo(width-padR+10, height-padB);
+                    ctx.stroke();
+                    
+                    // Texto Eje X
+                    ctx.fillStyle = "#aaa";
+                    ctx.fillText("Día 0", padL, height - 10);
+                    
+                    var textoFinal = "Día " + maxD;
+                    var anchoTexto = ctx.measureText(textoFinal).width;
+                    ctx.fillText(textoFinal, width - padR - anchoTexto, height - 10);
+                }
+
+                function formatNumber(num) {
+                    if(num >= 1000000000) return (num/1000000000).toFixed(1) + "B";
+                    if(num >= 1000000) return (num/1000000).toFixed(1) + "M";
+                    if(num >= 1000) return (num/1000).toFixed(1) + "k";
+                    return num;
+                }
+            }
+
+            // --- CROSSHAIR (MIRA TELESCÓPICA) ---
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                onPositionChanged: (mouse) => {
+                    cursorLine.x = mouse.x
+                    // Solo visible si estamos dentro del área de la gráfica
+                    cursorLine.visible = (mouse.x > 50 && mouse.x < width - 70 && mouse.y < height - 30)
+                    
+                    if(cursorLine.visible && root.rawData.length > 0) {
+                        var plotW = width - 120; // width - padL - padR
+                        var pct = (mouse.x - 50) / plotW;
+                        var diaIdx = Math.round(pct * (root.rawData[0].length - 1));
+                        
+                        if(diaIdx < 0) diaIdx = 0;
+                        if(diaIdx >= root.rawData[0].length) diaIdx = root.rawData[0].length - 1;
+
+                        tooltip.dia = root.rawData[0][diaIdx];
+                        tooltip.s = root.rawData[1][diaIdx];
+                        tooltip.i = root.rawData[2][diaIdx];
+                        tooltip.r = root.rawData[3][diaIdx];
+                        tooltip.m = root.rawData[4][diaIdx];
+                        
+                        // Tooltip inteligente (no se sale de la pantalla)
+                        if(mouse.x > width / 2) tooltip.x = mouse.x - tooltip.width - 15;
+                        else tooltip.x = mouse.x + 15;
+                        
+                        tooltip.y = mouse.y
+                    }
+                }
+                onExited: cursorLine.visible = false
+            }
+
+            Rectangle {
+                id: cursorLine
+                width: 1; height: parent.height - 30
+                y: 20
+                color: "white"
+                visible: false
+                opacity: 0.5
+            }
+
+            // Tooltip con corrección de 'format'
+            Rectangle {
+                id: tooltip
+                visible: cursorLine.visible
+                width: 140; height: 115
+                color: "#dd1e1e2e"; radius: 5; border.color: "#555"
+                
+                property int dia: 0
+                property int s: 0; property int i: 0; property int r: 0; property int m: 0
+
+                // Función auxiliar LOCAL al tooltip
+                function format(n) { return Number(n).toLocaleString(Qt.locale(), 'f', 0); }
+
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 3
+                    Text { text: "Día " + tooltip.dia; color: "white"; font.bold: true; font.pixelSize: 14 }
+                    Rectangle { width: parent.width; height: 1; color: "#555" }
+                    
+                    Row { 
+                        visible: root.showS; spacing: 5; 
+                        Rectangle{width:8;height:8;color:colS;radius:4;anchors.verticalCenter:parent.verticalCenter} 
+                        Text{text:"S: "+tooltip.format(tooltip.s); color:"#ccc"; font.pixelSize:11} 
+                    }
+                    Row { 
+                        visible: root.showI; spacing: 5; 
+                        Rectangle{width:8;height:8;color:colI;radius:4;anchors.verticalCenter:parent.verticalCenter} 
+                        Text{text:"I: "+tooltip.format(tooltip.i); color:"#ccc"; font.pixelSize:11} 
+                    }
+                    Row { 
+                        visible: root.showR; spacing: 5; 
+                        Rectangle{width:8;height:8;color:colR;radius:4;anchors.verticalCenter:parent.verticalCenter} 
+                        Text{text:"R: "+tooltip.format(tooltip.r); color:"#ccc"; font.pixelSize:11} 
+                    }
+                    Row { 
+                        visible: root.showM; spacing: 5; 
+                        Rectangle{width:8;height:8;color:colM;radius:4;anchors.verticalCenter:parent.verticalCenter} 
+                        Text{text:"M: "+tooltip.format(tooltip.m); color:"#ccc"; font.pixelSize:11} 
+                    }
+                }
+            }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/VistaGrafica.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/VistaNoticias.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+Item {
+    id: root
+    anchors.fill: parent
+
+    property var modeloNoticias: []
+
+    // Conectar señal para actualizar lista en vivo
+    Connections {
+        target: backend
+        function onNoticiasActualizadas() {
+            root.cargarNoticias()
+        }
+    }
+
+    function cargarNoticias() {
+        if(backend) {
+            modeloNoticias = backend.obtener_historial_noticias()
+        }
+    }
+
+    Component.onCompleted: cargarNoticias()
+
+    // Fondo oscuro
+    Rectangle { anchors.fill: parent; color: "#1e1e2e" }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 40
+        spacing: 20
+
+        // CABECERA
+        RowLayout {
+            Layout.fillWidth: true
+            Button {
+                text: "⬅ Volver al Mapa"
+                flat: true
+                background: Rectangle { color: "#3a3f55"; radius: 5 }
+                contentItem: Text { text: parent.text; color: "#ccc"; font.bold: true }
+                onClicked: mainWindow.vistaActual = "mapa"
+            }
+            
+            Item { Layout.fillWidth: true }
+            
+            Text {
+                text: "📡 NOTICIAS MUNDIALES"
+                color: "white"
+                font.bold: true
+                font.pixelSize: 28
+                font.letterSpacing: 2
+            }
+            
+            Item { Layout.fillWidth: true }
+            Item { width: 100 }
+        }
+
+        Rectangle { Layout.fillWidth: true; height: 2; color: "#444" }
+
+        // LISTA DE NOTICIAS
+        ListView {
+            id: lista
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            model: root.modeloNoticias
+            spacing: 8
+
+            delegate: Rectangle {
+                id: card
+                width: lista.width
+                height: 60
+                radius: 6
+                
+                // Lógica de colores según tipo
+                color: {
+                    if (modelData.tipo === "INFECT") return "#2c0b0e" // Rojo muy oscuro
+                    if (modelData.tipo === "CURE") return "#0b1a2c"   // Azul muy oscuro
+                    if (modelData.tipo === "DEATH") return "#1a1a1a"  // Gris casi negro
+                    return "#2f3542" // Gris estándar
+                }
+
+                // Borde izquierdo de color para identificar rápido
+                Rectangle {
+                    width: 5; height: parent.height
+                    color: {
+                        if (modelData.tipo === "INFECT") return "#ff5252"
+                        if (modelData.tipo === "CURE") return "#4fc3f7"
+                        if (modelData.tipo === "DEATH") return "#7f8c8d"
+                        return "#bdc3c7"
+                    }
+                    anchors.left: parent.left
+                }
+
+                // Efecto Hover (Iluminación)
+                MouseArea {
+                    id: ma
+                    anchors.fill: parent
+                    hoverEnabled: true
+                }
+                
+                border.color: ma.containsMouse ? "#ffffff" : "transparent"
+                border.width: 1
+                opacity: ma.containsMouse ? 1.0 : 0.8
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 20
+                    anchors.rightMargin: 20
+                    spacing: 20
+
+                    // DÍA
+                    Rectangle {
+                        width: 60; height: 30
+                        color: "#444"; radius: 4
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Día " + modelData.dia
+                            color: "#fff"; font.bold: true; font.pixelSize: 12
+                        }
+                    }
+
+                    // MENSAJE
+                    Text {
+                        Layout.fillWidth: true
+                        text: modelData.mensaje
+                        color: "white"
+                        font.pixelSize: 16
+                        font.family: "Segoe UI"
+                        wrapMode: Text.WordWrap
+                    }
+                    
+                    // ICONO
+                    Text {
+                        text: {
+                            if (modelData.tipo === "INFECT") return "☣️"
+                            if (modelData.tipo === "CURE") return "💉"
+                            if (modelData.tipo === "DEATH") return "💀"
+                            return "ℹ️"
+                        }
+                        font.pixelSize: 20
+                    }
+                }
+            }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/VistaNoticias.qml ---
+
+--- INICIO DE ARCHIVO: ui/components/VistaRanking.qml ---
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+Item {
+    id: root
+    anchors.fill: parent
+
+    signal volverClicked()
+
+    property var rankingData: [] 
+    
+    // Filtro actual: "I" (Infectados), "M" (Muertos), "R" (Recuperados), "S" (Sanos)
+    property string currentFilter: "I" 
+
+    // Colores Dinámicos
+    property color cTop1: "#ff5252"
+    property color cTop2: "#ff7b7b"
+    property color cTop3: "#ffbaba"
+    property color cRest: "#555555"
+    property string labelValor: "Infectados"
+
+    function cargarDatos() {
+        if(backend) {
+            rankingData = backend.obtener_ranking_global(root.currentFilter)
+            actualizarPaleta()
+        }
+    }
+
+    function actualizarPaleta() {
+        switch(currentFilter) {
+            case "I": // INFECTADOS
+                cTop1 = "#d32f2f"; cTop2 = "#f44336"; cTop3 = "#ff9800"; cRest = "#3a3f55";
+                labelValor = "Infectados";
+                break;
+            case "M": // MUERTOS
+                cTop1 = "#000000"; cTop2 = "#424242"; cTop3 = "#757575"; cRest = "#9e9e9e";
+                labelValor = "Fallecidos";
+                break;
+            case "R": // RECUPERADOS
+                cTop1 = "#0288d1"; cTop2 = "#03a9f4"; cTop3 = "#4dd0e1"; cRest = "#3a3f55";
+                labelValor = "Recuperados";
+                break;
+            case "S": // SANOS
+                cTop1 = "#2980b9"; cTop2 = "#8e44ad"; cTop3 = "#e91e63"; cRest = "#c0392b";
+                labelValor = "Sanos";
+                break;
+        }
+    }
+
+    onCurrentFilterChanged: cargarDatos()
+    Component.onCompleted: cargarDatos()
+
+    Rectangle {
+        anchors.fill: parent
+        color: "#1e1e2e"
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        // Márgenes grandes
+        anchors.leftMargin: 80
+        anchors.rightMargin: 80
+        anchors.topMargin: 20
+        anchors.bottomMargin: 20
+        spacing: 15
+
+        // --- CABECERA ---
+        RowLayout {
+            Layout.fillWidth: true
+            Button {
+                text: "⬅ Volver"
+                flat: true
+                onClicked: root.volverClicked()
+                contentItem: Text { text: parent.text; color: "#bdc3c7"; font.bold: true }
+                background: Rectangle { color: "#3a3f55"; radius: 5 }
+            }
+            Item { Layout.fillWidth: true } 
+            Text {
+                text: "Ranking Global: " + labelValor
+                color: "white"
+                font.pixelSize: 22
+                font.bold: true
+            }
+            Item { Layout.fillWidth: true }
+            Item { width: 80 }
+        }
+
+        // --- BOTONES DE FILTRO ---
+        RowLayout {
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 10
+            
+            component FilterBtn: Button {
+                property string filterCode: "I"
+                property string emoji: "🤒"
+                property string label: "Infectados"
+                property color activeColor: "#ff5252"
+                
+                background: Rectangle {
+                    color: root.currentFilter === filterCode ? activeColor : "#2f3542"
+                    radius: 20
+                    border.width: root.currentFilter === filterCode ? 2 : 0
+                    border.color: "white"
+                    Behavior on color { ColorAnimation { duration: 200 } }
+                }
+                contentItem: Row {
+                    spacing: 5
+                    anchors.centerIn: parent
+                    Text { text: emoji; font.pixelSize: 16 }
+                    Text { 
+                        text: label; 
+                        color: root.currentFilter === filterCode ? "white" : "#bdc3c7"
+                        font.bold: true 
+                    }
+                }
+                onClicked: root.currentFilter = filterCode
+            }
+
+            FilterBtn { filterCode: "I"; emoji: "🤒"; label: "Infectados"; activeColor: "#d32f2f" }
+            FilterBtn { filterCode: "M"; emoji: "💀"; label: "Muertos"; activeColor: "#424242" }
+            FilterBtn { filterCode: "R"; emoji: "💚"; label: "Recuperados"; activeColor: "#03a9f4" }
+            FilterBtn { filterCode: "S"; emoji: "🛡️"; label: "Sanos"; activeColor: "#8e44ad" }
+        }
+
+        // --- ENCABEZADOS ---
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Text { text: "#"; color: "#7f8c8d"; font.bold: true; width: 40; horizontalAlignment: Text.AlignHCenter }
+            Text { text: "PAÍS"; color: "#7f8c8d"; font.bold: true; Layout.fillWidth: true }
+            
+            Text { text: root.labelValor.toUpperCase(); color: "white"; font.bold: true; width: 120; horizontalAlignment: Text.AlignRight }
+            Text { text: "% RELATIVO"; color: "#aaa"; font.bold: true; width: 80; horizontalAlignment: Text.AlignRight }
+        }
+
+        Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+        // --- LISTA ---
+        ListView {
+            id: listaPaises
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            model: root.rankingData
+            spacing: 6
+
+            ScrollBar.vertical: ScrollBar { active: true }
+
+            delegate: Item {
+                id: filaDelegate
+                width: listaPaises.width
+                height: 55
+
+                readonly property var dato: modelData
+                readonly property int posicion: index + 1
+                readonly property real porcentaje: dato.ratio * 100
+                
+                property color rowColor: {
+                    if (posicion === 1) return root.cTop1;
+                    if (posicion === 2) return root.cTop2;
+                    if (posicion === 3) return root.cTop3;
+                    return root.cRest;
+                }
+
+                MouseArea {
+                    id: mouseArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                }
+
+                // Fondo de la fila
+                Rectangle {
+                    anchors.fill: parent
+                    color: mouseArea.containsMouse ? "#40ffffff" : "#2f3542"
+                    radius: 5
+                    border.color: mouseArea.containsMouse ? "white" : "transparent"
+                    border.width: 1
+
+                    // Barra de progreso
+                    Rectangle {
+                        width: parent.width * (dato.ratio)
+                        height: parent.height
+                        color: filaDelegate.rowColor
+                        opacity: mouseArea.containsMouse ? 0.6 : 0.3
+                        radius: 5
+                        
+                        Behavior on width { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                        Behavior on color { ColorAnimation { duration: 400 } }
+                    }
+                }
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 15
+                    anchors.rightMargin: 15
+                    spacing: 15
+
+                    // 1. Posición
+                    Rectangle {
+                        width: 32; height: 32; radius: 16
+                        color: filaDelegate.rowColor
+                        Text { 
+                            anchors.centerIn: parent
+                            text: posicion
+                            color: "white"
+                            font.bold: true
+                        }
+                    }
+
+                    // 2. Nombre
+                    Column {
+                        Layout.fillWidth: true
+                        Text { 
+                            text: dato.nombre
+                            color: "white"
+                            font.pixelSize: 16
+                            font.bold: true
+                            elide: Text.ElideRight
+                            width: parent.width
+                        }
+                        Text { 
+                            text: "Pob: " + Number(dato.poblacion).toLocaleString(Qt.locale(), 'f', 0)
+                            color: "#aaa"; font.pixelSize: 11
+                        }
+                    }
+
+                    // 3. Valor Principal
+                    Text { 
+                        text: Number(dato.valor).toLocaleString(Qt.locale(), 'f', 0)
+                        color: filaDelegate.rowColor
+                        font.pixelSize: 18
+                        font.bold: true
+                        Layout.preferredWidth: 120
+                        horizontalAlignment: Text.AlignRight
+                        
+                        // CORRECCIÓN: Eliminado Behavior on text { FadeAnimation {} }
+                        // QML no soporta animación directa de texto de esa forma.
+                    }
+
+                    // 4. Porcentaje
+                    Text { 
+                        text: porcentaje.toFixed(1) + "%"
+                        color: "#ddd"
+                        font.pixelSize: 14
+                        font.bold: true
+                        Layout.preferredWidth: 80
+                        horizontalAlignment: Text.AlignRight
+                    }
+                }
+            }
+        }
+    }
+}
+
+--- FIN DE ARCHIVO: ui/components/VistaRanking.qml ---
 

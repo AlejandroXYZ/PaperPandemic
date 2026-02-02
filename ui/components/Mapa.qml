@@ -7,6 +7,16 @@ Item {
     anchors.fill: parent
     clip: true
 
+    Rectangle {
+        anchors.fill: mapRoot
+        // Usamos una conexión segura al ThemeManager global
+        // Nota: Accedemos a 'theme' porque es un id global en main.qml
+        color: theme ? theme.mapBackground : "#121212"
+            
+        // Animación suave al cambiar de tema
+        Behavior on color { ColorAnimation { duration: 500 } }
+    }
+
     // =========================================================
     // 1. TOOLTIP (Variables Globales)
     // =========================================================
@@ -120,59 +130,64 @@ Item {
 
                 ShapePath {
                     strokeWidth: 1.0 / mapContainer.scale 
-                    strokeColor: "white"
+                    
+                    // --- CAMBIO AQUÍ ---
+                    strokeColor: theme ? theme.mapStroke : "white" 
+                    // -------------------
+                    
                     fillColor: (model.color_pais && model.color_pais !== "") ? model.color_pais : "#CFD8DC"
                     fillRule: ShapePath.WindingFill
                     PathSvg { path: model.path }
                 }
+                
 
-                MouseArea {
-                    id: countryMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    containmentMask: countryShape
-                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
-                    
-                    // Permite arrastrar el mapa desde un país
-                    drag.target: mapContainer
-                    drag.filterChildren: true 
-
-                    onDoubleClicked: (mouse) => {
-                        let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
-                        mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
-                    }
-
-                    // --- TOOLTIP CORREGIDO ---
-                    onEntered: {
-                        if (!countryMouse.drag.active) {
-                            try {
-                                mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
-                            } catch(e) { mapRoot.tooltipHtml = "Cargando..." }
-                            
-                            mapRoot.isTooltipVisible = true
-                            // CORRECCIÓN: Usamos mouseX/mouseY directos, no el objeto 'mouse'
-                            updateTooltipPos(mouseX, mouseY)
-                        }
-                    }
-                    
-                    onPositionChanged: (mouse) => {
-                        if (countryMouse.drag.active) {
-                            mapRoot.isTooltipVisible = false
-                        } else {
-                            // Aquí 'mouse' sí existe porque viene de la señal
-                            updateTooltipPos(mouse.x, mouse.y)
-                        }
-                    }
-
-                    onExited: mapRoot.isTooltipVisible = false
-                    onCanceled: mapRoot.isTooltipVisible = false // Por si el arrastre cancela el hover
-
-                    function updateTooltipPos(mx, my) {
-                        var pos = mapToItem(mapRoot, mx, my)
-                        mapRoot.tipX = pos.x + 15
-                        mapRoot.tipY = pos.y + 15
+            MouseArea {
+                id: countryMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                containmentMask: countryShape
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                drag.target: mapContainer
+                drag.filterChildren: true
+                
+                // --- 1. LÓGICA DEL TOOLTIP (RECUPERADA) ---
+                onEntered: {
+                // Llamamos a Python para obtener el HTML del país
+                if(mapa_modelo) {
+                    mapRoot.tooltipHtml = mapa_modelo.get_datos_pais_html(model.codigo)
+                    mapRoot.isTooltipVisible = true
                     }
                 }
+                
+                onExited: {
+                    mapRoot.isTooltipVisible = false
+                }
+                
+                onPositionChanged: (mouse) => {
+                    // Hacemos que el tooltip siga al mouse
+                    var pos = countryMouse.mapToItem(mapRoot, mouse.x, mouse.y)
+                    mapRoot.tipX = pos.x + 15
+                    mapRoot.tipY = pos.y + 15
+                }
+                                
+                // --- 2. LÓGICA DEL GRÁFICO DE PASTEL Y ZOOM ---
+                onDoubleClicked: (mouse) => {
+                // A) Zoom Visual
+                    let mapPoint = mapContainer.mapFromItem(countryMouse, mouse.x, mouse.y)
+                    mapRoot.flyToCountry(mapPoint.x, mapPoint.y)
+                                
+                    // B) Coordenada Global
+                    var screenPos = countryMouse.mapToItem(mapRoot, mouse.x, mouse.y)
+                          
+                    // C) Abrir Popup
+                    infoPaisPopup.abrir(
+                        screenPos.x, 
+                        mapRoot.width, 
+                        mapRoot.height, 
+                        model.codigo 
+                    )
+                }
+            }
             }
         }
     }
@@ -217,6 +232,19 @@ Item {
         RoundButton {
             width: 50; height: 50; text: "-"; font.pixelSize: 24
             onClicked: mapRoot.setZoomManual(0.6)
+        }
+    }
+    PieChartPopup {
+        id: infoPaisPopup
+        // Se asegura de estar encima del mapa
+        z: 9999 
+
+        onIrARankingGlobal: {
+            mainWindow.vistaActual = "ranking"
+        }
+            
+        onIrAGraficaHistorica: {
+            mainWindow.vistaActual = "grafico"
         }
     }
 }
