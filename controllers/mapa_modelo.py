@@ -24,7 +24,7 @@ class MapaModeloSIRD(QAbstractListModel):
         # 1. CARGA DE GEOMETRÍA
         try:
             BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            json_path: str = os.path.join(BASE_DIR, "ui", "assets", "paises.json")
+            json_path: str = rutas(os.path.join("ui","assets","paises.json"))
             with open(json_path, encoding='utf-8') as f:
                 self.geometria = json.load(f)
         except Exception as e:

@@ -1,5 +1,6 @@
 import sys
 import os
+from path import rutas
 from pathlib import Path
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
@@ -33,7 +34,7 @@ if __name__ == "__main__":
     base_dir:str = os.path.dirname(os.path.abspath(__file__))
     engine.addImportPath(os.path.join(base_dir, "ui"))
     
-    qml_file = Path(__file__).parent / "ui/main.qml"
+    qml_file = rutas(os.path.join("ui","main.qml"))
     engine.load(qml_file)
 
     if not engine.rootObjects():

@@ -1,3 +1,4 @@
+from path import rutas
 from PySide6.QtCore import QObject, Signal, Property
 import os
 import json
@@ -14,8 +15,8 @@ class Options(QObject):
     #--------------------------------------------------------------
 
     _BACKEND_DIR: str = os.path.dirname(os.path.abspath(__file__))
-    RUTA_DB_CREADA: str = os.path.join(_BACKEND_DIR, "data", "mundo.db")
-    RUTA_CSV: str = os.path.join(_BACKEND_DIR, "data", "poblacion.csv")
+    RUTA_DB_CREADA: str = rutas(os.path.join("backend","data","mundo.db"))
+    RUTA_CSV: str = rutas(os.path.join("backend","data","poblacion.csv"))
     
     # Archivo para guardar preferencias
     RUTA_CONFIG: str = os.path.join(_BACKEND_DIR, "data", "config.json")
