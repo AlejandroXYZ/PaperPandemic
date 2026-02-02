@@ -1,0 +1,42 @@
+name: Compilación Paper-Pandemic
+
+on:
+    push:
+        branches: [ main ]
+    workflow_dispatch:
+
+
+jobs:
+    build:
+        runs-on: ubuntu-lastest
+
+        steps:
+
+        uses: actions/checkout@v3
+
+        name: Instalar python 3.12
+        uses: actions/setup-python@v4
+        with:
+            python-versio: "3.12"
+            cache: "pip"
+
+        name: Instalar Dependencias del sistema
+        run:|
+            pip install numpy pandas pyside6 
+            pip install nuitka
+
+
+        name: Compilar con Nuitka
+        run: |
+            python -m nuitka --standalone --enable-plugin=pyside6 --include-qt-plugins=qml --include-data-dir=ui=ui --include-data-dir=backend/data=backend/data --output-dir=build main.py
+
+        name: Comprimir resultado
+        run: |
+            cd build
+            tar -czvf SimuladorSIRD_Linux-tar.gz main.dist
+
+        name: Subir descargable
+        uses: actions/upload-artifact@v4
+        with:
+            name: SimuladorSIRD_Linux
+            path: build/SimuladorSIRD_Linux.tar.gz    
