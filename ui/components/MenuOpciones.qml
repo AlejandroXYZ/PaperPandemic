@@ -95,6 +95,8 @@ Drawer {
                 }
 
                 Item { Layout.fillHeight: true }
+
+                Text { text: "Creado por Alejandro Moncada"; font.pixelSize: 12; font.bold: true; color: "white"; Layout.alignment: Qt.AlignHCenter}
             }
 
             // -----------------------------------------------------
