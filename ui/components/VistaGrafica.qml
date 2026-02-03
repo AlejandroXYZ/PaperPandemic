@@ -314,7 +314,7 @@ Item {
                 color: "#dd1e1e2e"; radius: 5; border.color: "#555"
                 
                 property int dia: 0
-                property int s: 0; property int i: 0; property int r: 0; property int m: 0
+                property real s: 0; property real i: 0; property real r: 0; property real m: 0
 
                 // Función auxiliar LOCAL al tooltip
                 function format(n) { return Number(n).toLocaleString(Qt.locale(), 'f', 0); }

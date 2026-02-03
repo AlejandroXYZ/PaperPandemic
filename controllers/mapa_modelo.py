@@ -1,3 +1,4 @@
+from path import rutas
 from PySide6.QtCore import QAbstractListModel, Qt, Slot
 import json
 import os
