@@ -5,18 +5,13 @@
 ![Pandas](https://img.shields.io/badge/Data-Pandas%20%7C%20Numpy-orange?style=for-the-badge&logo=pandas)
 ![Architecture](https://img.shields.io/badge/Architecture-MVC-red?style=for-the-badge)
 
-> **Simulador epidemiológico en tiempo real optimizado para hardware limitado (Intel Atom / Single Core).** 
-
-
-
+> **Simulador epidemiológico en tiempo real optimizado para hardware limitado (Intel Atom / Single Core).**
 
 Combina un motor matemático vectorizado con una interfaz gráfica reactiva de alta velocidad **( QT/C++ )**.
 
 <p align="center">
     <img src="images/mapa.gif" alt"Demo del proyecto" width="600">
 </p>
-
-
 
 ---
 
@@ -26,13 +21,9 @@ Combina un motor matemático vectorizado con una interfaz gráfica reactiva de a
 
 El reto principal fue lograr opmitizar cientos de cálculos matemáticos complejos en un entorno de bajos recursos hasta alcanzar 60fps.
 
-
-
 ![Grafica de Pastel](images/pastel.gif)
 
-
 ### Características Clave
-
 
 * **Motor Matemático Vectorizado:** Lógica SIRD implementada con `Numpy` y `Pandas` para operaciones matriciales ultrarrápidas
 
@@ -44,21 +35,16 @@ El reto principal fue lograr opmitizar cientos de cálculos matemáticos complej
 
 * **Interfaz Reactiva:** Dashboard construido en **Qt Quick (QML)** con renderizado por GPU.
 
-
-
-
 ![Grafico de lineas](images/lineas.jpg)
+![Grafico de Pastel](./images/pastel.jpg)
 
 ---
-
 
 ## 🔧 Optimización
 
 Para garantizar la fluidez en hardware legacy, se implementaron las siguientes estrategias:
 
-
-1.  **Cálculo Vectorial:** En lugar de iterar país por país, el estado del mundo se calcula como una matriz única.
-
+1. **Cálculo Vectorial:** En lugar de iterar país por país, el estado del mundo se calcula como una matriz única.
 
     ```python
     # Ejemplo del código (backend/sir_model.py)
@@ -70,12 +56,12 @@ Para garantizar la fluidez en hardware legacy, se implementaron las siguientes e
     sano_a_infectado = self.df["beta"] * self.df["S"] * self.df["I"] / (self.df["poblacion"] + 1)
     self.df["S"] -= sano_a_infectado
     ```
-    
-2.  **Gestión de Memoria QML:** Uso de `Loader` dinámico para destruir componentes gráficos (como el mapa) cuando no están en pantalla, liberando RAM y CPU.
-3.  **Señales y Slots:** Comunicación asíncrona entre Python y la UI para evitar bloqueos del hilo principal.
 
+2. **Gestión de Memoria QML:** Uso de `Loader` dinámico para destruir componentes gráficos (como el mapa) cuando no están en pantalla, liberando RAM y CPU.
+3. **Señales y Slots:** Comunicación asíncrona entre Python y la UI para evitar bloqueos del hilo principal.
 
 ---
+
 ## 📂 Estructura del Proyecto
 
 ```text
@@ -92,16 +78,11 @@ PaperPandemic/
 
 ```
 
-
 ![Temas](images/temas.jpg)
-
-
-
 
 ## Instalación y Uso
 
-
-#### 1.Clonar el repositorio:
+#### 1.Clonar el repositorio
 
 ```
 Bash
@@ -109,23 +90,19 @@ git clone [https://github.com/alejandroxyz/PaperPandemic.git](https://github.com
 cd PaperPandemic
 ```
 
-#### 2. Instalar dependencias: Se recomienda usar un entorno virtual.
-
+#### 2. Instalar dependencias: Se recomienda usar un entorno virtual
 
 ```
 Bash
 pip install -r requirements.txt
 ```
 
-
-#### 3. Ejecutar:
+#### 3. Ejecutar
 
 ```
 Bash
 python main.py
 ```
-
-
 
 ## 👤 Autor
 
@@ -137,6 +114,4 @@ Alejandro Moncada
 
 [Gmail](mailto:alejandromdekuedit@gmail.com)
 
-
 ---
-
